@@ -37,10 +37,20 @@ const keysRouter = require('./routes/keys');
 const planRouter = require('./routes/plan');
 const executeRouter = require('./routes/execute');
 
+const planLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60
+});
+
+const executeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10
+});
+
 // Include routes
-app.use('/api/keys', keysRouter);
-app.use('/api/plan', planRouter);
-app.use('/api/execute', executeRouter);
+app.use('/api', keysRouter);
+app.use('/api/plan', planLimiter, planRouter);
+app.use('/api/execute', executeLimiter, executeRouter);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

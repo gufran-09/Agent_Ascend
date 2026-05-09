@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../db/supabase');
-const { encryptKey, decryptKey } = require('../security/vault');
+const { encryptKey } = require('../security/vault');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -11,7 +11,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
  * Submit and validate an API key for a provider
  * Body: { provider: "openai"|"anthropic"|"google_gemini", api_key: "sk-...", session_id: "uuid" }
  */
-router.post('/', async (req, res) => {
+router.post('/keys', async (req, res) => {
   try {
     const { provider, api_key, session_id } = req.body;
 
@@ -198,7 +198,7 @@ async function validateOpenAIKey(apiKey) {
   try {
     const client = new OpenAI({ apiKey });
     // Cheap test call: list models (minimal cost)
-    await client.models.list({ limit: 1 });
+    await client.models.list();
     return true;
   } catch (error) {
     if (error.status === 401) return false;
