@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const keysRouter = require('./keys');
+const { requireValidSessionId } = require('../core/validation');
 
 router.get('/', async (req, res) => {
   try {
@@ -11,6 +12,9 @@ router.get('/', async (req, res) => {
         error: 'Missing required query parameter: session_id'
       });
     }
+
+    const sessionError = requireValidSessionId(session_id);
+    if (sessionError) return res.status(400).json({ error: sessionError });
 
     const models = await keysRouter.getAvailableModelsForSession(session_id);
     res.json({ models, count: models.length });

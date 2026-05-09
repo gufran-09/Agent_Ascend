@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { executePlan } = require('../core/executor');
 const { logExecution } = require('../db/analytics');
+const { requireValidSessionId } = require('../core/validation');
 
 router.post('/', async (req, res) => {
   try {
@@ -12,6 +13,9 @@ router.post('/', async (req, res) => {
         error: 'Missing required fields: session_id, plan'
       });
     }
+
+    const sessionError = requireValidSessionId(session_id);
+    if (sessionError) return res.status(400).json({ error: sessionError });
 
     const result = await executePlan(plan, session_id);
     await logExecution({ sessionId: session_id, plan, result });

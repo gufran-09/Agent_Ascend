@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { generatePlan } = require('../core/router');
+const { requireValidSessionId } = require('../core/validation');
 
 router.post('/', async (req, res) => {
   try {
@@ -11,6 +12,9 @@ router.post('/', async (req, res) => {
         error: 'Missing required fields: session_id, prompt'
       });
     }
+
+    const sessionError = requireValidSessionId(session_id);
+    if (sessionError) return res.status(400).json({ error: sessionError });
 
     if (available_models && !Array.isArray(available_models)) {
       return res.status(400).json({

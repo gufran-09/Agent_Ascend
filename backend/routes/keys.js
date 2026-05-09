@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../db/supabase');
 const { encryptKey } = require('../security/vault');
+const { requireValidSessionId } = require('../core/validation');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -21,6 +22,9 @@ router.post('/', async (req, res) => {
         error: 'Missing required fields: provider, api_key, session_id'
       });
     }
+
+    const sessionError = requireValidSessionId(session_id);
+    if (sessionError) return res.status(400).json({ error: sessionError });
 
     const validProviders = ['openai', 'anthropic', 'google_gemini'];
     if (!validProviders.includes(provider)) {
@@ -118,6 +122,9 @@ router.get('/models', async (req, res) => {
         error: 'Missing required query parameter: session_id'
       });
     }
+
+    const sessionError = requireValidSessionId(session_id);
+    if (sessionError) return res.status(400).json({ error: sessionError });
 
     const modelList = await getAvailableModelsForSession(session_id);
     res.json({

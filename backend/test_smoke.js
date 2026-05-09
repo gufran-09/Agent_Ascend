@@ -8,6 +8,7 @@ const { classifyPrompt } = require('./core/classifier');
 const { estimateTokensAndCost } = require('./core/token_counter');
 const { validatePlanModels } = require('./core/router');
 const { aggregateResults, scoreResponse, getFallbackModels } = require('./core/executor');
+const { requireValidSessionId } = require('./core/validation');
 
 function testVault() {
   const encrypted = encryptKey('sk-test-1234');
@@ -60,12 +61,18 @@ function testExecutorHelpers() {
   assert.strictEqual(fallbacks[0].id, 'b');
 }
 
+function testValidation() {
+  assert.strictEqual(requireValidSessionId('11111111-1111-4111-8111-111111111111'), null);
+  assert.strictEqual(requireValidSessionId('not-a-uuid'), 'session_id must be a valid UUID');
+}
+
 function run() {
   testVault();
   testClassifier();
   testEstimator();
   testPlanValidator();
   testExecutorHelpers();
+  testValidation();
   console.log('✅ smoke tests passed');
 }
 
