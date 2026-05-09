@@ -44,13 +44,13 @@ router.post('/', async (req, res) => {
     const encryptedKey = encryptKey(api_key);
     const keyHint = `...${api_key.slice(-4)}`; // Last 4 chars only
 
-    // Store in Supabase
+    // Store in Supabase (session_id maps to user_id in DB)
     const { data: existingKey, error: fetchError } = await supabase
       .from('api_key_vault')
       .select('*')
-      .eq('session_id', session_id)
+      .eq('user_id', session_id)
       .eq('provider', provider)
-      .eq('revoked_at', null)
+      .is('revoked_at', null)
       .single();
 
     if (existingKey) {
@@ -73,7 +73,7 @@ router.post('/', async (req, res) => {
       const { error: insertError } = await supabase
         .from('api_key_vault')
         .insert({
-          session_id,
+          user_id: session_id,
           provider,
           encrypted_key: encryptedKey,
           key_hint: keyHint,
@@ -117,13 +117,13 @@ router.get('/models', async (req, res) => {
       });
     }
 
-    // Fetch all valid API keys for this session
+    // Fetch all valid API keys for this user
     const { data: keys, error: keysError } = await supabase
       .from('api_key_vault')
       .select('provider, is_valid')
-      .eq('session_id', session_id)
+      .eq('user_id', session_id)
       .eq('is_valid', true)
-      .eq('revoked_at', null);
+      .is('revoked_at', null);
 
     if (keysError) throw keysError;
 
