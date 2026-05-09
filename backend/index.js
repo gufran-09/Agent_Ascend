@@ -40,18 +40,16 @@ app.get("/health", (req, res) => {
 });
 
 // Import routes (will be created in later phases)
-const keysRouter = require("./routes/keys");
-const planRouter = require("./routes/plan");
-const executeRouter = require("./routes/execute");
-const historyRouter = require("./routes/history");
-const analyticsRouter = require("./routes/analytics");
+const keysRouter = require('./routes/keys');
+const modelsRouter = require('./routes/models');
+const planRouter = require('./routes/plan');
+const executeRouter = require('./routes/execute');
 
 // Include routes
-app.use("/api", keysRouter);
-app.use("/api", planRouter);
-app.use("/api", executeRouter);
-app.use("/api", historyRouter);
-app.use("/api", analyticsRouter);
+app.use('/api/keys', keysRouter);
+app.use('/api/models', modelsRouter);
+app.use('/api/plan', planRouter);
+app.use('/api/execute', executeRouter);
 
 // Error handling middleware
 app.use(errorHandler);

@@ -1,412 +1,1111 @@
-# Backend Implementation Plan - M1 (Backend Engineer)
+# Backend Implementation Plan - M1 Backend Engineer
 
-**BYO-LLM Orchestrator** | Your Role: Backend & Orchestration Engineer | Total Time: ~30 Hours
+**Project:** Agent Ascend / BYO-LLM Orchestrator  
+**Backend folder:** `backend/`  
+**Product docs folder:** `Product_Details/`  
+**Updated for current repo state:** 2026-05-09
 
 ---
 
-## 🎯 Your Critical Path Overview
+## 1. Product Picture
 
-**You are the foundation.** M2 (Frontend) and M3 (Integration) both depend on your endpoints. Build in this exact order.
+Agent Ascend is a bring-your-own-key multi-LLM orchestration app.
 
+The target flow is:
+
+```text
+User connects API keys
+  -> backend validates and stores keys
+  -> backend exposes only models available from connected keys
+  -> user submits a prompt
+  -> backend creates an execution plan using only available models
+  -> user approves the plan
+  -> backend executes subtasks on assigned models
+  -> backend retries failed subtasks with fallback models
+  -> backend returns merged final output plus cost, tokens, latency, and confidence data
+  -> frontend displays plan, execution status, result details, and analytics
 ```
-Hour 0-1:  Project Setup
-    ↓
-Hour 1-3:  API Key Vault (DEP: M2 can start UI)
-    ↓
-Hour 3-7:  Router Brain (DEP: M2 can show plan preview)
-    ↓
-Hour 7-14: Execution Engine (DEP: M2 can show execution)
-    ↓
-Hour 14-17: Analytics + Fallback (DEP: M3 integration)
-    ↓
-Hour 17-20: Integration QA (DEP: Full system test)
+
+The most important backend rule is: **API keys must never be returned to the browser after submission. All LLM calls must happen server-side.**
+
+---
+
+## 2. What Has Already Been Built
+
+### 2.1 Frontend already built enough to call backend
+
+The Next.js app already has these pieces:
+
+- Login/auth pages exist under `app/login` and `app/auth/callback`.
+- Chat page and chat state exist under `app/chat/page.tsx` and `app/lib/context.tsx`.
+- API client exists at `app/lib/api.ts`.
+- Settings page can submit provider keys to backend:
+  - `POST http://localhost:8000/api/keys`
+  - `GET http://localhost:8000/api/keys/models?session_id=...`
+- Chat prompt flow expects backend plan endpoint:
+  - `POST http://localhost:8000/api/plan`
+- Approve button expects backend execution endpoint:
+  - `POST http://localhost:8000/api/execute`
+- UI components already exist for:
+  - API key connection cards
+  - available models table
+  - execution plan message
+  - executing state message
+  - final result and analytics details
+  - confidence score display
+  - fallback warning display
+
+### 2.2 Backend foundation already built
+
+Existing backend files:
+
+```text
+backend/
+  index.js
+  package.json
+  package-lock.json
+  README.md
+  core/
+    classifier.js
+    executor.js
+    router.js
+    token_counter.js
+  db/
+    analytics.js
+    setup.sql
+    supabase.js
+  routes/
+    execute.js
+    keys.js
+    plan.js
+  security/
+    vault.js
+```
+
+Implemented:
+
+- Express server in `backend/index.js`.
+- CORS enabled.
+- Helmet security middleware enabled.
+- Rate limiting enabled.
+- JSON body parsing enabled.
+- Health check endpoint:
+  - `GET /health`
+- Route mounting:
+  - `/api/keys`
+  - `/api/plan`
+  - `/api/execute`
+- Supabase client exists in `db/supabase.js`.
+- Initial Supabase setup SQL exists in `db/setup.sql`.
+- API key submission route exists in `routes/keys.js`.
+- Model listing route exists in `routes/keys.js` as `GET /api/keys/models`.
+- Provider validation functions exist for:
+  - OpenAI
+  - Anthropic
+  - Google Gemini
+
+### 2.3 Backend API key flow partially built
+
+`routes/keys.js` already does:
+
+- Accepts `{ provider, api_key, session_id }`.
+- Validates provider is one of:
+  - `openai`
+  - `anthropic`
+  - `google_gemini`
+- Attempts a cheap provider validation call.
+- Stores key metadata in Supabase.
+- Returns only provider status and key hint, not the full key.
+- Returns available models from `model_registry` for providers with valid keys.
+
+### 2.4 Current frontend/backend contract
+
+Frontend expects this plan response from `POST /api/plan`:
+
+```ts
+interface Plan {
+  planId: string;
+  prompt: string;
+  category: string;
+  difficulty: string;
+  needsDecomposition: boolean;
+  availableModels: string[];
+  subtasks: {
+    id: number;
+    title: string;
+    assignedModel: string;
+    prompt?: string;
+    estimatedTokens?: number;
+    estimatedCost?: number;
+    estimatedTime?: number;
+  }[];
+  totalEstimate: {
+    tokens: number;
+    cost: number;
+    timeSeconds: number;
+  };
+}
+```
+
+Frontend expects this execution response from `POST /api/execute`:
+
+```ts
+interface ExecutionResult {
+  planId: string;
+  status: 'completed' | 'partial' | 'failed';
+  subtaskResults: {
+    id: number;
+    title: string;
+    model: string;
+    output: string;
+    tokens?: number;
+    cost?: number;
+    latencyMs?: number;
+    usedFallback?: boolean;
+    confidenceScore?: number;
+    confidenceNote?: string;
+  }[];
+  finalOutput: string;
+  analytics: {
+    totalTokens: number;
+    totalCost: number;
+    totalTimeMs: number;
+    modelsUsed: string[];
+  };
+}
 ```
 
 ---
 
-## 📋 Phase-by-Phase Breakdown
+## 3. Critical Gaps Found in Current Backend
 
-### **PHASE 1: Project Setup & Environment (Hour 0-1)**
-**Priority: 🔴 HIGHEST** | **Dependencies: None** | **Team Impact: None**
+These are the things the backend engineer must fix/build next.
 
-**What to do first:**
+### 3.1 Security gap: `security/vault.js` is not encrypting
 
-1. **Create backend project structure**
-   ```bash
-   mkdir backend && cd backend
-   npm init -y
-   npm install express openai @anthropic-ai/sdk @google/generative-ai
-   npm install @supabase/supabase-js dotenv crypto-js
-   npm install zod cors helmet express-rate-limit
-   ```
+Current file says hackathon mode and passes keys through as plaintext.
 
-2. **Create folder structure**
-   ```
-   backend/
-   ├── index.js (main entry)
-   ├── routes/
-   │   ├── keys.js
-   │   ├── plan.js
-   │   └── execute.js
-   ├── core/
-   │   ├── router.js
-   │   ├── executor.js
-   │   ├── classifier.js
-   │   └── token_counter.js
-   ├── security/
-   │   └── vault.js
-   ├── db/
-   │   └── supabase.js
-   └── .env
-   ```
+Required:
 
-3. **Create .env file**
-   ```env
-   SUPABASE_URL=https://xxxx.supabase.co
-   SUPABASE_SERVICE_KEY=eyJhbGciOiJ...
-   ENCRYPTION_KEY=hackathon_secret_key_32chars_xx
-   PORT=8000
-   ```
+- Replace plaintext passthrough with AES-256-GCM encryption.
+- Use `ENCRYPTION_KEY` from `.env`.
+- Store encrypted payload only.
+- Never log raw API keys.
+- Never return raw API keys.
 
-4. **Write index.js (main entry point)**
-   - Express app with CORS enabled
-   - Include all route modules
-   - Start server on port 8000
-   - Test: `node index.js` → visit `http://localhost:8000`
+This is the highest-priority fix because the product requirement explicitly says keys are encrypted server-side.
 
-5. **Write db/supabase.js**
-   - Initialize Supabase client
-   - Export for use across all modules
+### 3.2 Database column mismatch
 
-**✅ Checkpoint:**
-- Server starts without errors
-- All folders exist
-- .env in .gitignore
-- Swagger UI accessible at /docs
+`db/setup.sql` creates `api_key_vault.session_id`, but `routes/keys.js` reads/writes `user_id`.
 
-**🔗 Team Handoff:**
-- None (you're setting up foundation)
+Current code uses:
 
----
+```js
+.eq('user_id', session_id)
+.insert({ user_id: session_id, ... })
+```
 
-### **PHASE 2: API Key Vault (Hour 1-3)**
-**Priority: 🔴 HIGHEST** | **Dependencies: Phase 1** | **Team Impact: M2 can start building UI**
+Current SQL has:
 
-**What to do right:**
+```sql
+session_id TEXT NOT NULL
+```
 
-1. **Database is already created** ✅ (we did this earlier)
-   - Tables: `users`, `sessions`, `api_key_vault`, `model_registry`
-   - Row Level Security enabled
-   - 13 models pre-populated
+Required: choose one naming convention and make backend plus SQL match.
 
-2. **Write security/vault.js**
-   - AES-256-GCM encryption
-   - `encryptKey(plaintext)` → returns encrypted string
-   - `decryptKey(encrypted)` → returns plaintext
-   - **RULE:** Decrypted key lives in memory <50ms, never logged
+Recommended for MVP: use `session_id` everywhere because the frontend passes `session_id` and setup SQL already has it.
 
-3. **Write routes/keys.js**
-   - POST `/api/keys` - Validate → Encrypt → Store
-   - GET `/api/models` - Return available models for session
-   - Validate key with cheap API call before storing
-   - **CRITICAL:** Never return key in response
+### 3.3 `GET /api/models` mismatch with docs
 
-4. **Test key submission**
-   - Submit real OpenAI key
-   - Check Supabase: encrypted_key should be ciphertext
-   - Test GET /api/models returns correct list
+Docs mention `GET /api/models`, but current backend exposes:
 
-**✅ Checkpoint:**
-- POST /api/keys works with real key
-- GET /api/models returns available models
-- Keys encrypted in DB (no plain text)
-- No keys in logs or responses
+```text
+GET /api/keys/models?session_id=...
+```
 
-**🔗 Team Handoff:**
-- **Tell M2:** "Keys API is live, start building Screen 1 (API Key Connection)"
-- M2 can now build the key submission UI
+Frontend currently calls `/api/keys/models`, so this works for the UI. Optional improvement: also add an alias route `GET /api/models` to match docs.
 
----
+### 3.4 Router brain is not built
 
-### **PHASE 3: Router LLM Brain (Hour 3-7)**
-**Priority: 🔴 HIGHEST** | **Dependencies: Phase 2** | **Team Impact: M2 can show plan preview**
+Current files are placeholders:
 
-**What to do right:**
+- `routes/plan.js`
+- `core/router.js`
+- `core/classifier.js` should be verified/finished
+- `core/token_counter.js` should be verified/finished
 
-1. **Write core/router.js**
-   - System prompt engineering (spend time here!)
-   - Call LLM with prompt + availableModels
-   - Force JSON output format
-   - Validate all assigned models are in available list
+Required:
 
-2. **Router System Prompt Strategy:**
-   ```
-   You are an AI orchestration router.
-   Available models: {availableModels}
-   User prompt: {userPrompt}
-   
-   Return ONLY JSON:
-   {
-     "category": "research|coding|logic|creative|planning|math|general",
-     "difficulty": "easy|medium|hard|agentic",
-     "needsDecomposition": true|false,
-     "subtasks": [
-       {
-         "id": 1,
-         "title": "task description",
-         "assignedModel": "from availableModels only",
-         "prompt": "sub-prompt"
-       }
-     ]
-   }
-   ```
+- Classify prompt category.
+- Detect difficulty.
+- Decide if decomposition is needed.
+- Create subtasks.
+- Assign each subtask only to available models.
+- Estimate tokens, cost, and time.
+- Validate final plan before returning it to frontend.
 
-3. **Write routes/plan.js**
-   - POST `/api/plan`
-   - Call router to generate plan
-   - Add token/cost estimates (coordinate with M3)
-   - Return plan in contract format
+### 3.5 Execution engine is not built
 
-4. **Test plan generation**
-   - Submit: "Build a market research report"
-   - Verify: Returns JSON with subtasks
-   - Verify: All models are from available list
-   - Verify: Token/cost estimates populated
+Current files are placeholders:
 
-**✅ Checkpoint:**
-- POST /api/plan returns valid JSON
-- Router only uses models from available list
-- Token/cost fields populated
-- Plan matches contract format
+- `routes/execute.js`
+- `core/executor.js`
 
-**🔗 Team Handoff:**
-- **Tell M2:** "Plan API is live, start building Screen 2 (Prompt + Plan Preview)"
-- **Tell M3:** "Need token_counter module for cost estimates"
-- M2 can now show the impressive plan preview UI
+Required:
+
+- Receive approved plan.
+- Load encrypted provider keys from Supabase.
+- Decrypt only server-side immediately before LLM calls.
+- Execute subtasks sequentially first for MVP.
+- Retry with fallback models if a model call fails.
+- Aggregate subtask outputs into final response.
+- Return the exact `ExecutionResult` shape expected by frontend.
+
+### 3.6 Analytics module is not built
+
+`db/analytics.js` is placeholder.
+
+Required:
+
+- Log each execution.
+- Store prompt category, difficulty, models used, tokens, cost, latency, fallback events, and confidence scores.
+- Expose history/analytics later if time allows.
+
+### 3.7 Streaming is not built
+
+Product design asks for SSE streaming, but frontend currently uses normal `POST /api/execute` and waits for a complete JSON response.
+
+Recommended MVP path:
+
+1. Build non-streaming `/api/execute` first.
+2. Add optional `POST /api/execute/stream` or `GET /api/execute/stream/:id` only after the basic demo works.
 
 ---
 
-### **PHASE 4: Execution Engine (Hour 7-14)**
-**Priority: 🔴 HIGHEST** | **Dependencies: Phase 3** | **Team Impact: M2 can show execution results**
+## 4. Team Responsibilities: Built vs Still Required
 
-**What to do right:**
+### M1 - Backend & Orchestration Engineer
 
-1. **Write core/executor.js**
-   - Execute each subtask sequentially
-   - Decrypt key → Call LLM → Stream output
-   - Handle failures with fallback
-   - Track tokens, cost, latency
+Owner of:
 
-2. **Fallback Logic:**
-   - Try assigned model first
-   - On failure (429, 5xx, timeout): try next available
-   - Log fallback events
-   - Max 2 fallback attempts per subtask
+- API key vault
+- model registry access
+- router LLM brain
+- task decomposition
+- execution engine
+- fallback logic
+- backend API contracts
+- server-side LLM calls
 
-3. **Write routes/execute.js**
-   - POST `/api/execute`
-   - Execute approved plan
-   - Return results in contract format
-   - Include analytics data
+Already built:
 
-4. **Test execution**
-   - Submit simple prompt
-   - Verify: All subtasks complete
-   - Verify: Fallback works (disable one key)
-   - Verify: Final merged output returned
+- Express backend skeleton.
+- Health endpoint.
+- API key submission route.
+- Provider validation functions.
+- Available models route.
+- Initial DB setup SQL.
 
-**✅ Checkpoint:**
-- POST /api/execute runs all subtasks
-- Fallback works on model failure
-- Final merged output returned
-- Analytics data (tokens, cost, latency) present
+Still required:
 
-**🔗 Team Handoff:**
-- **Tell M2:** "Execute API is live, start building Screen 3 (Execution + Results)"
-- **Tell M3:** "Need analytics module for tracking"
-- M2 can now show the full execution flow
+1. Fix vault encryption.
+2. Fix `session_id` vs `user_id` DB mismatch.
+3. Implement `/api/plan`.
+4. Implement router/decomposition logic.
+5. Implement plan validator.
+6. Implement `/api/execute`.
+7. Implement model call adapters for OpenAI, Anthropic, Gemini.
+8. Implement fallback model selection.
+9. Implement result aggregation.
+10. Implement analytics logging hooks.
+11. Add tests or scripts proving each route works.
 
----
+### M2 - Frontend & Visualization Engineer
 
-### **PHASE 5: Analytics + Fallback (Hour 14-17)**
-**Priority: 🟡 MEDIUM** | **Dependencies: Phase 4** | **Team Impact: M3 integration**
+Owner of:
 
-**What to do right:**
+- Next.js user experience
+- API key connection UI
+- prompt input
+- execution plan preview
+- approve/cancel UX
+- reasoning graph visualization
+- live execution view
+- final result and analytics display
+- demo polish
 
-1. **Write db/analytics.js** (Coordinate with M3)
-   - `upsert_model_usage_stats()` - Daily rollup
-   - `check_daily_spend_cap()` - Enforce limits
-   - Log execution to audit_logs table
+Already built:
 
-2. **Add confidence scoring** (Coordinate with M3)
-   - After each subtask, call scorer LLM
-   - Score 0-100 with rationale
-   - Store in confidence_scores table
+- Main UI structure.
+- Chat state/context.
+- Settings page for provider keys.
+- Available models table.
+- Prompt submission flow.
+- Plan display component.
+- Approve and execute flow.
+- Result detail display with cost/tokens/latency/confidence.
 
-3. **Implement rate limiting**
-   - `express-rate-limit` on /api/plan (60/min)
-   - `express-rate-limit` on /api/execute (10/min)
+Still required:
 
-4. **Test analytics**
-   - Execute multiple prompts
-   - Verify: model_usage_stats updated
-   - Verify: audit_logs populated
-   - Verify: confidence scores saved
+1. Handle backend errors more gracefully in UI.
+2. Add cancel behavior for plan card.
+3. Add modify-subtask flow if desired.
+4. Add reasoning graph visualization using the plan and execution result.
+5. Add true streaming UI only after backend supports SSE.
+6. Add demo mode/cached sample data for reliability.
+7. Polish loading states, empty states, and mobile layout.
 
-**✅ Checkpoint:**
-- Analytics tracking works
-- Daily rollup updates correctly
-- Confidence scores saved
-- Rate limiting enforced
+### M3 - Integration, Data & QA Engineer
 
-**🔗 Team Handoff:**
-- **Tell M3:** "Analytics ready, integrate with your modules"
-- **Tell M2:** "Analytics data available for dashboard"
+Owner of:
 
----
+- token/cost estimation
+- Supabase schema correctness
+- analytics logging
+- confidence scoring
+- end-to-end testing
+- demo script and pitch deck
 
-### **PHASE 6: Integration QA (Hour 17-20)**
-**Priority: 🟡 MEDIUM** | **Dependencies: Phase 5** | **Team Impact: Full system test**
+Already partly built:
 
-**What to do right:**
+- Initial `model_registry` cost fields exist in SQL.
+- Frontend result UI can display confidence fields if backend returns them.
+- Backend has placeholder `db/analytics.js`.
 
-1. **End-to-end testing**
-   - Test full flow: Key → Plan → Execute → Results
-   - Test with multiple providers
-   - Test fallback scenarios
-   - Test edge cases
+Still required:
 
-2. **Security audit**
-   - Verify no keys in logs
-   - Verify RLS policies working
-   - Verify encryption/decryption correct
-   - Check for any data leaks
-
-3. **Performance testing**
-   - Test with long prompts
-   - Test with many subtasks
-   - Measure response times
-   - Optimize if needed
-
-4. **Documentation**
-   - Update API documentation
-   - Document security rules
-   - Create troubleshooting guide
-
-**✅ Checkpoint:**
-- Full system works end-to-end
-- Security audit passed
-- Performance acceptable
-- Documentation complete
-
-**🔗 Team Handoff:**
-- **Tell Team:** "Backend ready for final integration"
-- **Tell M2:** "All endpoints tested and documented"
-- **Tell M3:** "Analytics integration complete"
+1. Verify Supabase schema matches backend code exactly.
+2. Add missing execution/history tables if not already in Supabase.
+3. Build token and cost estimation helpers.
+4. Connect estimator into `/api/plan`.
+5. Build confidence scoring helper.
+6. Connect confidence scoring into `/api/execute`.
+7. Build analytics logging in `db/analytics.js`.
+8. Run full E2E tests:
+   - connect key
+   - list models
+   - generate plan
+   - approve execution
+   - receive result
+   - verify DB logs
+9. Prepare demo prompts and fallback/cached demo plan.
 
 ---
 
-## 🚨 Critical Dependencies & Interconnections
+## 5. Backend Engineer Step-by-Step Implementation Plan
 
-### **Your Dependencies on Others:**
-
-1. **M3 (Integration Engineer):**
-   - Token counting logic (core/token_counter.js)
-   - Analytics tracking (db/analytics.js)
-   - Confidence scoring module
-
-2. **Supabase:**
-   - Database already created ✅
-   - Tables: users, sessions, api_key_vault, model_registry, executions, etc.
-   - 13 models pre-populated ✅
-
-### **Others' Dependencies on You:**
-
-1. **M2 (Frontend Engineer):**
-   - **Hour 1-3:** Needs POST /api/keys, GET /api/models → Can build Screen 1
-   - **Hour 3-7:** Needs POST /api/plan → Can build Screen 2
-   - **Hour 7-14:** Needs POST /api/execute → Can build Screen 3
-   - **Hour 14+:** Needs analytics data → Can build dashboard
-
-2. **M3 (Integration Engineer):**
-   - **Hour 3-7:** Needs token_counter for cost estimates
-   - **Hour 14-17:** Needs analytics integration
-   - **Hour 17-20:** Needs full system for QA
+This is the actual implementation order for the backend engineer.
 
 ---
 
-## 📊 Timeline Summary
+### Step 0 - Confirm backend runs
 
-| Phase | Hours | What You Do | Who Depends | Handoff To |
-|-------|-------|-------------|-------------|------------|
-| 1. Setup | 0-1 | Project structure, env, server | None | None |
-| 2. Key Vault | 1-3 | Encryption, key validation | M2 | M2 (Screen 1) |
-| 3. Router | 3-7 | Plan generation, routing | M2, M3 | M2 (Screen 2), M3 (token_counter) |
-| 4. Execution | 7-14 | Subtask execution, fallback | M2, M3 | M2 (Screen 3), M3 (analytics) |
-| 5. Analytics | 14-17 | Tracking, scoring, rate limiting | M3 | M3 (integration) |
-| 6. QA | 17-20 | E2E testing, security audit | All | All (final) |
+Commands:
 
----
+```bash
+cd backend
+npm install
+npm start
+```
 
-## 🎯 Priority Order (Do NOT Skip)
+Verify:
 
-1. **FIRST:** Phase 1 (Setup) - Foundation
-2. **SECOND:** Phase 2 (Key Vault) - Security foundation
-3. **THIRD:** Phase 3 (Router) - Core intelligence
-4. **FOURTH:** Phase 4 (Execution) - Main functionality
-5. **FIFTH:** Phase 5 (Analytics) - Enhanced features
-6. **SIXTH:** Phase 6 (QA) - Final polish
+```bash
+curl http://localhost:8000/health
+```
 
----
+Expected:
 
-## 🔑 Key Rules to Remember
+```json
+{
+  "status": "ok",
+  "message": "BYO-LLM Orchestrator Backend is running"
+}
+```
 
-### **Security Rules (Non-negotiable):**
-- 🔴 API keys NEVER leave backend
-- 🔴 Keys encrypted before DB storage
-- 🔴 Keys decrypted only milliseconds before LLM call
-- 🔴 Never return keys in responses
-- 🔴 Never log keys anywhere
-
-### **Team Coordination:**
-- ✅ Tell M2 when each API endpoint is ready
-- ✅ Coordinate with M3 on token_counter and analytics
-- ✅ Follow the contract formats exactly
-- ✅ Don't change API contracts without team discussion
-
-### **Quality Standards:**
-- ✅ Test each phase before moving on
-- ✅ Handle errors gracefully
-- ✅ Return consistent error messages
-- ✅ Log important events for debugging
+Do not move on until this works.
 
 ---
 
-## 📞 Communication Points
+### Step 1 - Fix the database naming mismatch
 
-**When to notify M2 (Frontend):**
-- Hour 1: "Keys API live, start Screen 1"
-- Hour 3: "Plan API live, start Screen 2"
-- Hour 7: "Execute API live, start Screen 3"
-- Hour 14: "Analytics ready, add to dashboard"
+Open:
 
-**When to coordinate with M3 (Integration):**
-- Hour 3: "Need token_counter module"
-- Hour 7: "Need analytics tracking"
-- Hour 14: "Integrate your analytics module"
-- Hour 17: "Ready for full system QA"
+- `backend/routes/keys.js`
+- `backend/db/setup.sql`
+
+Use `session_id` consistently.
+
+Change all Supabase queries in `routes/keys.js` from `user_id` to `session_id`:
+
+```js
+.eq('session_id', session_id)
+.insert({ session_id, provider, encrypted_key: encryptedKey, ... })
+```
+
+Validation:
+
+- Submit a key from the frontend settings page.
+- Confirm Supabase row has `session_id` filled.
+- Confirm no `user_id` database error occurs.
 
 ---
 
-## 🎉 Success Criteria
+### Step 2 - Re-enable AES-256-GCM encryption
 
-**By Hour 20, you should have:**
-- ✅ All 6 phases complete
-- ✅ All endpoints working and tested
-- ✅ Security rules enforced
-- ✅ Analytics tracking functional
-- ✅ Full system tested end-to-end
-- ✅ Documentation complete
-- ✅ Ready for hackathon demo
+Replace `security/vault.js` plaintext passthrough.
 
-**Your backend will be the foundation that makes the entire project work. Build it right, build it secure, build it first!**
+Implementation requirements:
+
+- Use Node `crypto` module.
+- Derive a 32-byte key from `process.env.ENCRYPTION_KEY` with SHA-256 for stable MVP behavior.
+- Use `aes-256-gcm`.
+- Generate a 12-byte random IV per encryption.
+- Store payload as a string containing IV, auth tag, ciphertext.
+- Throw clear error if encryption key is missing.
+
+Recommended payload format:
+
+```text
+v1:<iv_base64>:<tag_base64>:<ciphertext_base64>
+```
+
+Validation:
+
+```js
+const encrypted = encryptKey('sk-test-1234')
+const decrypted = decryptKey(encrypted)
+console.log(encrypted !== 'sk-test-1234') // true
+console.log(decrypted === 'sk-test-1234') // true
+```
+
+Also check Supabase: `encrypted_key` must not contain the raw key.
+
+---
+
+### Step 3 - Harden API key route
+
+In `routes/keys.js`:
+
+1. Never log `api_key`.
+2. Return validation errors without exposing secrets.
+3. If validation fails, decide MVP behavior:
+   - Recommended: store invalid key metadata but not use it for models.
+   - Current behavior already stores with `is_valid: false`.
+4. Fix Google validation if `genAI.listModels()` is unavailable in installed SDK version.
+   - Alternative cheap validation: create a model and call `generateContent('hi')` with a tiny prompt.
+5. Add optional route alias:
+
+```text
+GET /api/models?session_id=...
+```
+
+This can call the same logic as `GET /api/keys/models`.
+
+Validation:
+
+- Invalid key returns `status: invalid`.
+- Valid key returns `status: active`.
+- Response never includes `api_key` or `encrypted_key`.
+- `GET /api/keys/models` returns models only for valid connected providers.
+
+---
+
+### Step 4 - Verify model registry data
+
+Current `db/setup.sql` seeds 9 models:
+
+- OpenAI:
+  - `gpt-4o`
+  - `gpt-4o-mini`
+  - `gpt-4-turbo`
+- Anthropic:
+  - `claude-3-5-sonnet-20241022`
+  - `claude-3-haiku-20240307`
+  - `claude-3-opus-20240229`
+- Google Gemini:
+  - `gemini-1.5-pro`
+  - `gemini-1.5-flash`
+  - `gemini-2.0-flash`
+
+Validation query in Supabase:
+
+```sql
+select provider, model_id, is_active
+from model_registry
+order by provider, model_id;
+```
+
+Make sure model IDs match the SDK call names used in execution.
+
+---
+
+### Step 5 - Implement token and cost helpers
+
+Open:
+
+- `core/token_counter.js`
+
+Build these functions:
+
+```js
+estimateTokens(text)
+estimateCost(inputTokens, outputTokens, modelRecord)
+estimateLatencySeconds(subtasks, modelRecords)
+```
+
+MVP token estimate:
+
+```js
+Math.ceil(text.length / 4)
+```
+
+Cost formula:
+
+```js
+(inputTokens / 1000) * model.cost_per_1k_input
++ (outputTokens / 1000) * model.cost_per_1k_output
+```
+
+Use model registry prices as source of truth.
+
+Validation:
+
+- Unit test a prompt and confirm nonzero token estimate.
+- Confirm total plan estimate equals sum of subtask estimates.
+
+---
+
+### Step 6 - Implement prompt classifier
+
+Open:
+
+- `core/classifier.js`
+
+Build:
+
+```js
+classifyPrompt(prompt)
+detectDifficulty(prompt)
+shouldDecompose(prompt, difficulty)
+```
+
+MVP logic can be deterministic keyword/length based:
+
+Categories:
+
+- `research`
+- `coding`
+- `logic`
+- `creative`
+- `planning`
+- `math`
+- `general`
+
+Difficulty:
+
+- `easy`
+- `medium`
+- `hard`
+- `agentic`
+
+Suggested rules:
+
+- Coding keywords -> `coding`.
+- Math keywords -> `math`.
+- Research keywords -> `research`.
+- If prompt length > 800 or asks for multiple deliverables -> `hard`.
+- If prompt asks to build, compare, test, deploy, or multi-step workflow -> `agentic`.
+- Decompose if `hard` or `agentic`.
+
+This deterministic classifier is acceptable for MVP and avoids spending tokens before plan generation.
+
+---
+
+### Step 7 - Implement `/api/plan`
+
+Open:
+
+- `routes/plan.js`
+- `core/router.js`
+
+Request body from frontend:
+
+```json
+{
+  "session_id": "user-or-session-id",
+  "prompt": "user prompt",
+  "available_models": ["gpt-4o-mini", "claude-3-haiku-20240307"]
+}
+```
+
+Route responsibilities:
+
+1. Validate `session_id` exists.
+2. Validate `prompt` exists.
+3. Get actual available models from DB for session.
+4. Intersect DB models with frontend `available_models`.
+5. Reject if no available models.
+6. Call `generatePlan(prompt, availableModels, sessionId)`.
+7. Validate plan only uses available model IDs.
+8. Return frontend-compatible `Plan` object.
+
+MVP plan generator can be deterministic first:
+
+- Use classifier from Step 6.
+- If no decomposition, create one subtask.
+- If decomposition needed, create 3 to 5 subtasks.
+- Select best model by strengths:
+  - coding -> model with `coding`, otherwise first available
+  - research/analysis -> model with `analysis` or `reasoning`
+  - creative -> model with `writing` or `general`
+  - math/logic -> model with `reasoning`
+  - general -> cheapest/fastest available
+
+Required response shape:
+
+```json
+{
+  "planId": "uuid-or-timestamp-id",
+  "prompt": "original prompt",
+  "category": "coding",
+  "difficulty": "medium",
+  "needsDecomposition": false,
+  "availableModels": ["gpt-4o-mini"],
+  "subtasks": [
+    {
+      "id": 1,
+      "title": "Answer the user request",
+      "assignedModel": "gpt-4o-mini",
+      "prompt": "original prompt",
+      "estimatedTokens": 500,
+      "estimatedCost": 0.001,
+      "estimatedTime": 3
+    }
+  ],
+  "totalEstimate": {
+    "tokens": 500,
+    "cost": 0.001,
+    "timeSeconds": 3
+  }
+}
+```
+
+Validation:
+
+```bash
+curl -X POST http://localhost:8000/api/plan \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"SESSION_ID","prompt":"Build a React todo app","available_models":["gpt-4o-mini"]}'
+```
+
+Confirm the frontend displays the plan card.
+
+---
+
+### Step 8 - Add plan validator
+
+Inside `core/router.js`, add:
+
+```js
+validatePlanModels(plan, availableModelIds)
+```
+
+Rules:
+
+- Every `subtask.assignedModel` must be in `availableModelIds`.
+- Plan must have at least one subtask.
+- Every subtask must have `id`, `title`, `assignedModel`, and `prompt`.
+- Total estimates must be numeric.
+
+If validation fails, return HTTP 500 or regenerate with deterministic fallback.
+
+This protects against the highest-risk product issue: router assigning unavailable models.
+
+---
+
+### Step 9 - Implement provider model call adapters
+
+Create or implement inside `core/executor.js`:
+
+```js
+callModel({ provider, modelId, apiKey, prompt })
+callOpenAI(modelId, apiKey, prompt)
+callAnthropic(modelId, apiKey, prompt)
+callGemini(modelId, apiKey, prompt)
+```
+
+Return normalized shape:
+
+```js
+{
+  output: string,
+  inputTokens: number,
+  outputTokens: number,
+  totalTokens: number,
+  latencyMs: number
+}
+```
+
+Provider mapping comes from `model_registry.provider`.
+
+MVP details:
+
+- OpenAI: use Chat Completions or Responses API depending installed SDK version.
+- Anthropic: use `messages.create`.
+- Gemini: use `generateContent`.
+- If SDK token usage is unavailable, estimate tokens using `estimateTokens()`.
+
+---
+
+### Step 10 - Implement `/api/execute`
+
+Open:
+
+- `routes/execute.js`
+- `core/executor.js`
+
+Request body from frontend:
+
+```json
+{
+  "session_id": "...",
+  "plan": { "planId": "...", "subtasks": [] }
+}
+```
+
+Route responsibilities:
+
+1. Validate `session_id` and `plan`.
+2. Re-fetch available models from DB.
+3. Validate plan models again.
+4. Load encrypted keys for providers needed by the plan.
+5. Decrypt key only when calling provider.
+6. Execute subtasks sequentially for MVP.
+7. On failure, fallback to another available model.
+8. Capture tokens, cost, latency.
+9. Add confidence score if helper exists, otherwise return a simple heuristic score.
+10. Aggregate outputs into final answer.
+11. Log analytics.
+12. Return frontend-compatible `ExecutionResult`.
+
+Required response shape:
+
+```json
+{
+  "planId": "plan_123",
+  "status": "completed",
+  "subtaskResults": [
+    {
+      "id": 1,
+      "title": "Answer the user request",
+      "model": "gpt-4o-mini",
+      "output": "...",
+      "tokens": 600,
+      "cost": 0.0012,
+      "latencyMs": 1200,
+      "usedFallback": false,
+      "confidenceScore": 85,
+      "confidenceNote": "Response appears complete and relevant."
+    }
+  ],
+  "finalOutput": "merged markdown response",
+  "analytics": {
+    "totalTokens": 600,
+    "totalCost": 0.0012,
+    "totalTimeMs": 1200,
+    "modelsUsed": ["gpt-4o-mini"]
+  }
+}
+```
+
+Validation:
+
+- Click Approve in frontend.
+- UI should replace executing message with result message.
+- Details tab should show per-subtask output, confidence, tokens, cost, latency.
+
+---
+
+### Step 11 - Implement fallback model logic
+
+Inside `core/executor.js`, add:
+
+```js
+getFallbackModels(failedModelId, availableModels, requiredProviderKeys)
+```
+
+Rules:
+
+- Exclude failed model.
+- Only include models with valid provider key.
+- Prefer same category strengths if possible.
+- Otherwise use cheapest available model.
+- Log fallback reason.
+
+For each subtask:
+
+```text
+try assigned model
+if fails -> try fallback model 1
+if fails -> try fallback model 2
+if all fail -> mark subtask failed
+```
+
+Execution status rules:
+
+- all subtasks succeeded -> `completed`
+- at least one succeeded and one failed -> `partial`
+- all failed -> `failed`
+
+---
+
+### Step 12 - Implement result aggregation
+
+Add:
+
+```js
+aggregateResults(prompt, subtaskResults)
+```
+
+MVP aggregation:
+
+- If one subtask, final output is that output.
+- If multiple subtasks, join as markdown sections:
+
+```md
+# Final Response
+
+## 1. Research
+...
+
+## 2. Implementation
+...
+
+## 3. Validation
+...
+```
+
+Better version after MVP:
+
+- Use cheapest available model to synthesize a polished final answer from all subtask outputs.
+
+---
+
+### Step 13 - Implement confidence scoring
+
+MVP confidence score can be simple while M3 builds LLM scoring:
+
+```js
+score = 70
++ output length/relevance bonuses
+- fallback penalty
+- error penalty
+```
+
+Return:
+
+```js
+{
+  score: 82,
+  note: "Response is complete, relevant, and produced without fallback."
+}
+```
+
+When M3 delivers LLM confidence scorer, replace heuristic with:
+
+```js
+scoreResponse(subtaskTitle, output, availableModels, sessionId)
+```
+
+---
+
+### Step 14 - Implement analytics logging
+
+Open:
+
+- `db/analytics.js`
+- `db/setup.sql`
+
+Add tables if missing:
+
+```sql
+create table if not exists executions (
+  id uuid default gen_random_uuid() primary key,
+  session_id text not null,
+  plan_id text not null,
+  prompt text not null,
+  category text,
+  difficulty text,
+  status text not null,
+  models_used text[] default '{}',
+  total_tokens integer default 0,
+  total_cost numeric(10,6) default 0,
+  total_time_ms integer default 0,
+  fallback_events jsonb default '[]'::jsonb,
+  confidence_scores jsonb default '[]'::jsonb,
+  created_at timestamptz default now()
+);
+```
+
+Implement:
+
+```js
+logExecution({ sessionId, plan, result })
+```
+
+Call it at the end of `/api/execute`.
+
+Validation:
+
+- Run an execution.
+- Query Supabase:
+
+```sql
+select plan_id, status, models_used, total_tokens, total_cost
+from executions
+order by created_at desc
+limit 5;
+```
+
+---
+
+### Step 15 - Add backend smoke tests
+
+Create a simple smoke script, for example:
+
+```text
+backend/test_smoke.js
+```
+
+Test sequence:
+
+1. `GET /health`
+2. `POST /api/keys` with invalid key and confirm safe error shape
+3. `GET /api/keys/models`
+4. `POST /api/plan`
+5. `POST /api/execute` if a real key exists
+
+Also test pure functions without real keys:
+
+- vault encrypt/decrypt
+- classifier output
+- token estimate
+- plan validator rejects unavailable model
+
+---
+
+## 6. Priority Order for Your Work
+
+If you are the backend engineer, do these in this exact order:
+
+1. **Fix DB mismatch**: `user_id` -> `session_id`.
+2. **Fix encryption**: replace plaintext vault.
+3. **Verify key/model flow**: settings page should connect key and show models.
+4. **Implement token/cost helper**.
+5. **Implement classifier**.
+6. **Implement deterministic `/api/plan`**.
+7. **Validate frontend plan card works**.
+8. **Implement model call adapters**.
+9. **Implement `/api/execute` sequential execution**.
+10. **Validate frontend approve/result flow works**.
+11. **Add fallback retries**.
+12. **Add analytics logging**.
+13. **Add confidence scoring heuristic or M3 integration**.
+14. **Optional: add SSE streaming**.
+15. **Run end-to-end demo test and document known issues**.
+
+---
+
+## 7. Backend Done Criteria
+
+Backend is demo-ready when all of these are true:
+
+- `GET /health` works.
+- `POST /api/keys` stores encrypted keys only.
+- `GET /api/keys/models` returns valid available models.
+- `POST /api/plan` returns a valid frontend-compatible plan.
+- Plan never uses unavailable models.
+- Frontend can display the plan.
+- `POST /api/execute` runs at least one real LLM call server-side.
+- Frontend can display final response.
+- Execution result includes tokens, cost, latency, models used.
+- Fallback is attempted when assigned model fails.
+- Analytics row is saved after execution.
+- No raw API keys appear in logs, responses, or database plaintext.
+
+---
+
+## 8. MVP vs Stretch Scope
+
+### Must-have MVP
+
+- Secure key storage with encryption.
+- Available model list.
+- Plan generation.
+- Plan validation.
+- Sequential execution.
+- Fallback.
+- Final merged output.
+- Basic cost/token/latency analytics.
+
+### Stretch after MVP works
+
+- True Router LLM plan generation instead of deterministic plan builder.
+- SSE streaming execution.
+- React Flow live reasoning graph events.
+- LLM-based final synthesis.
+- LLM-based confidence scoring.
+- User history endpoint.
+- Spend caps.
+- Provider key rotation/revocation UI.
+
+---
+
+## 9. Notes for Integration With Frontend
+
+Do not change frontend response shapes unless M2 agrees. The frontend already imports these TypeScript interfaces from `app/lib/types.ts`:
+
+- `ConnectedProvider`
+- `AvailableModel`
+- `Plan`
+- `ExecutionResult`
+
+The fastest path is to make backend exactly match those interfaces.
+
+Current frontend API paths:
+
+```text
+GET  /health
+POST /api/keys
+GET  /api/keys/models?session_id=...
+POST /api/plan
+POST /api/execute
+```
+
+If backend adds new routes, keep these old ones working.
+
+---
+
+## 10. Immediate Next Coding Checklist
+
+Use this checklist while implementing:
+
+```text
+[ ] routes/keys.js uses session_id, not user_id
+[ ] security/vault.js uses AES-256-GCM
+[ ] db/setup.sql has all needed tables
+[ ] core/token_counter.js estimates tokens and cost
+[ ] core/classifier.js classifies category/difficulty
+[ ] core/router.js creates and validates plans
+[ ] routes/plan.js calls router and returns Plan shape
+[ ] core/executor.js calls OpenAI/Anthropic/Gemini
+[ ] core/executor.js implements fallback
+[ ] routes/execute.js returns ExecutionResult shape
+[ ] db/analytics.js logs execution rows
+[ ] smoke tests pass
+[ ] frontend settings page shows connected models
+[ ] frontend chat shows execution plan
+[ ] frontend approve button returns final result
+```
