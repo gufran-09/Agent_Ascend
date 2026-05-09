@@ -14,6 +14,18 @@ router.post('/', async (req, res) => {
       });
     }
 
+    const { checkSpendCap } = require('../core/token_counter');
+    const config = require('../config');
+    const cap = await checkSpendCap(session_id);
+    if (!cap.allowed) {
+      return res.status(402).json({
+        success: false,
+        error: `Daily spend cap of $${config.dailyCapUSD} reached. Used today: $${cap.todaySpend.toFixed(4)}`,
+        code: 'SPEND_CAP_EXCEEDED',
+        todaySpend: cap.todaySpend,
+      });
+    }
+
     const sessionError = requireValidSessionId(session_id);
     if (sessionError) return res.status(400).json({ error: sessionError });
 

@@ -85,7 +85,7 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
       .eq("session_id", session_id)
       .eq("provider", provider)
       .is("revoked_at", null)
-      .single();
+      .single()
       .from('api_key_vault')
       .select('*')
       .eq('session_id', session_id)
