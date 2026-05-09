@@ -1,15 +1,8 @@
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require("@supabase/supabase-js");
+const config = require("../config");
 
-// Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+const supabase = createClient(config.supabaseUrl, config.supabaseKey);
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables');
-}
+console.log("✅ Supabase client initialized");
 
-const supabaseClient = createClient(supabaseUrl, supabaseKey);
-
-console.log('✅ Supabase client initialized');
-
-module.exports = supabaseClient;
+module.exports = supabase;

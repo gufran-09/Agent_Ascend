@@ -1,8 +1,11 @@
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-require('dotenv').config();
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+
+const config = require("./config");
+const requestLogger = require("./middleware/requestLogger");
+const errorHandler = require("./middleware/errorHandler");
 
 const app = express();
 
@@ -10,11 +13,13 @@ const app = express();
 app.use(helmet());
 
 // CORS configuration
-app.use(cors({
-  origin: '*', // Tighten for production, fine for hackathon
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+app.use(
+  cors({
+    origin: "*", // Tighten for production, fine for hackathon
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -24,43 +29,37 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // Body parsing
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: "1mb" }));
+
+// Request logging
+app.use(requestLogger);
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'BYO-LLM Orchestrator Backend is running' });
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 // Import routes (will be created in later phases)
-const keysRouter = require('./routes/keys');
-const planRouter = require('./routes/plan');
-const executeRouter = require('./routes/execute');
+const keysRouter = require("./routes/keys");
+const planRouter = require("./routes/plan");
+const executeRouter = require("./routes/execute");
+const historyRouter = require("./routes/history");
+const analyticsRouter = require("./routes/analytics");
 
 // Include routes
-app.use('/api/keys', keysRouter);
-app.use('/api/plan', planRouter);
-app.use('/api/execute', executeRouter);
+app.use("/api", keysRouter);
+app.use("/api", planRouter);
+app.use("/api", executeRouter);
+app.use("/api", historyRouter);
+app.use("/api", analyticsRouter);
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  res.status(500).json({ 
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
+app.use(errorHandler);
 
 // Start server
-const PORT = process.env.PORT || 8000;
+const PORT = config.port;
 app.listen(PORT, () => {
-  console.log(`🚀 BYO-LLM Orchestrator Backend running on http://localhost:${PORT}`);
-  console.log(`📚 API Documentation: http://localhost:${PORT}/health`);
+  console.log(`✅ Backend running on port ${PORT}`);
 });
 
 module.exports = app;
