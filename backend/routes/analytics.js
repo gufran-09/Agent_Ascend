@@ -33,8 +33,8 @@ router.get('/', validate(analyticsSchema, 'query'), async (req, res, next) => {
         id: m.id,
         provider: m.provider,
         displayName: m.displayName,
-        inputCostPer1k: m.cost_per_1k_input, // Using exact DB schema name or mapped name from models.js
-        outputCostPer1k: m.cost_per_1k_output
+        inputCostPer1k: m.inputCostPer1k ?? m.cost_per_1k_input ?? 0,
+        outputCostPer1k: m.outputCostPer1k ?? m.cost_per_1k_output ?? 0
       }))
     });
   } catch (err) {

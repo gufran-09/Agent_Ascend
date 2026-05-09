@@ -17,7 +17,7 @@ router.get('/', validate(historySchema, 'query'), async (req, res, next) => {
 
     const { data: rows, error, count } = await supabase
       .from('executions')
-      .select('id, prompt_category, difficulty, models_used, total_cost_usd, latency_ms, status, had_fallback, created_at', { count: 'exact' })
+      .select('*', { count: 'exact' })
       .eq('session_id', session_id)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -28,14 +28,14 @@ router.get('/', validate(historySchema, 'query'), async (req, res, next) => {
 
     const history = rows.map(r => ({
       id: r.id,
-      category: r.prompt_category,
+      category: r.prompt_category || r.category,
       difficulty: r.difficulty,
       models_used: r.models_used,
-      total_cost_usd: r.total_cost_usd,
-      total_cost_inr: r.total_cost_usd ? parseFloat((r.total_cost_usd * 83.5).toFixed(4)) : 0,
-      latency_ms: r.latency_ms,
+      total_cost_usd: Number(r.total_cost_usd ?? r.total_cost ?? 0),
+      total_cost_inr: Number(((Number(r.total_cost_usd ?? r.total_cost ?? 0)) * 83.5).toFixed(4)),
+      latency_ms: Number(r.latency_ms ?? r.total_time_ms ?? 0),
       status: r.status,
-      had_fallback: r.had_fallback,
+      had_fallback: Boolean(r.had_fallback || (Array.isArray(r.fallback_events) && r.fallback_events.length > 0)),
       created_at: r.created_at
     }));
 

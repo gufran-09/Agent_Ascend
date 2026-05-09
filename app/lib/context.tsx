@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import type { AppState, Chat, Message, ConnectedProvider, AvailableModel, Plan, ExecutionResult } from './types';
+import type { AppState, Chat, Message, ConnectedProvider, Plan } from './types';
 import { generateId, now, truncate } from './utils';
 import { createClient } from './supabase';
 import * as api from './api';
@@ -44,30 +44,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     backendOnline: false,
   });
 
-  // Listen for auth state changes
-  useEffect(() => {
-    const supabase = createClient();
-
-    // Get initial session
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user);
-      if (user) {
-        initializeForUser(user.id);
-      }
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
-      if (currentUser) {
-        initializeForUser(currentUser.id);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
   const initializeForUser = useCallback((userId: string) => {
     const initialChatId = generateId();
     setState(prev => ({
@@ -97,6 +73,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
     });
   }, []);
+
+  // Listen for auth state changes
+  useEffect(() => {
+    const supabase = createClient();
+
+    // Get initial session
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUser(user);
+      if (user) {
+        initializeForUser(user.id);
+      }
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      if (currentUser) {
+        initializeForUser(currentUser.id);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [initializeForUser]);
 
   const addChat = useCallback(() => {
     const newId = generateId();

@@ -1,72 +1,129 @@
-const express = require("express");
+const express = require('express');
 const { z } = require('zod');
 const crypto = require('crypto');
-const router = express.Router();
-<<<<<<< HEAD
+
 const validate = require('../middleware/validate');
 const { executePlan } = require('../core/executor');
 const { checkSpendCap } = require('../core/token_counter');
 const { getAvailableModels } = require('../db/models');
 const supabase = require('../db/supabase');
+const analyticsDb = require('../db/analytics');
+const { getPlan } = require('../core/plan_store');
 
-// Demo mode in-memory cache — keyed by prompt hash, expires after 60 min
-const demoCache = new Map();
+const router = express.Router();
 
 const executeSchema = z.object({
   session_id: z.string().uuid(),
-  plan_id: z.string().uuid(),
-  demo_mode: z.boolean().optional()
+  plan_id: z.string().uuid().optional(),
+  plan: z.any().optional()
 });
+
+function normalizeExecutionResult(planId, plan, result) {
+  const subtaskMap = new Map((plan.subtasks || []).map((task) => [task.id, task]));
+  const subtaskResults = (result.subtaskResults || []).map((item) => {
+    const task = subtaskMap.get(item.subtaskId) || {};
+    return {
+      id: item.subtaskId,
+      title: task.title || `Subtask ${item.subtaskId}`,
+      model: item.modelUsed || task.assignedModel || 'unknown',
+      output: item.output || '',
+      actualTokens: (item.inputTokens || 0) + (item.outputTokens || 0),
+      actualCost: item.costUSD || 0,
+      latencyMs: item.latencyMs || 0,
+      confidenceScore: item.error ? 20 : 80,
+      confidenceNote: item.error ? `Execution failed: ${item.error}` : 'Execution completed'
+    };
+  });
+
+  return {
+    planId,
+    status: result.status || 'partial',
+    subtaskResults,
+    finalOutput: result.finalOutput || '',
+    analytics: {
+      totalTokens: (result.totalInputTokens || 0) + (result.totalOutputTokens || 0),
+      totalCost: result.totalCostUSD || 0,
+      totalTimeMs: result.totalLatencyMs || 0,
+      modelsUsed: [...new Set(subtaskResults.map((r) => r.model))]
+    }
+  };
+}
+
+async function insertExecutionRecord(payload) {
+  const base = {
+    id: crypto.randomUUID(),
+    session_id: payload.sessionId,
+    plan_id: payload.planId,
+    prompt: payload.prompt,
+    category: payload.category,
+    difficulty: payload.difficulty,
+    status: payload.status,
+    models_used: payload.modelsUsed,
+    created_at: new Date().toISOString()
+  };
+
+  const primaryShape = {
+    ...base,
+    total_tokens: payload.totalTokens,
+    total_cost: payload.totalCost,
+    total_time_ms: payload.totalTimeMs,
+    fallback_events: payload.fallbackEvents || [],
+    confidence_scores: payload.confidenceScores || []
+  };
+
+  const fallbackShape = {
+    ...base,
+    prompt_raw: payload.prompt,
+    prompt_category: payload.category,
+    total_input_tokens: Math.floor(payload.totalTokens / 2),
+    total_output_tokens: Math.ceil(payload.totalTokens / 2),
+    total_cost_usd: payload.totalCost,
+    latency_ms: payload.totalTimeMs,
+    had_fallback: (payload.fallbackEvents || []).length > 0
+  };
+
+  let insertError = null;
+  ({ error: insertError } = await supabase.from('executions').insert(primaryShape));
+  if (!insertError) return;
+
+  ({ error: insertError } = await supabase.from('executions').insert(fallbackShape));
+  if (insertError) throw insertError;
+}
 
 router.post('/', validate(executeSchema), async (req, res, next) => {
   try {
-    const { session_id, plan_id, demo_mode } = req.body;
+    const { session_id, plan_id, plan } = req.body;
 
-    // 2. Fetch plan from Supabase
-    let planData;
-    if (supabase.getLatestPlan) {
-      const { data, error } = await supabase.getLatestPlan(plan_id);
-      if (error || !data) return res.status(404).json({ success: false, error: 'Plan not found' });
-      if (data.session_id !== session_id) return res.status(404).json({ success: false, error: 'Plan not found' });
-      planData = data.plan_json;
-    } else {
-      const { data, error } = await supabase
-        .from('plans')
-        .select('*')
-        .eq('id', plan_id)
-        .eq('session_id', session_id)
-        .single();
-      if (error || !data) return res.status(404).json({ success: false, error: 'Plan not found' });
-      planData = typeof data.plan_json === 'string' ? JSON.parse(data.plan_json) : data.plan_json;
-    }
+    let resolvedPlan = plan || null;
+    let resolvedPlanId = plan_id || (plan && plan.planId) || crypto.randomUUID();
 
-    const plan = planData;
-
-    // Demo cache check — return cached result if available
-    let cacheKey = null;
-    if (demo_mode && plan.subtasks) {
-      cacheKey = crypto.createHash('md5')
-        .update(JSON.stringify(plan.subtasks.map(t => t.prompt)))
-        .digest('hex');
-      if (demoCache.has(cacheKey)) {
-        console.log('[demo] Returning cached result for demo_mode request');
-        return res.json({ success: true, result: demoCache.get(cacheKey), fromCache: true });
+    if (!resolvedPlan) {
+      if (supabase.getLatestPlan) {
+        const { data } = await supabase.getLatestPlan(resolvedPlanId);
+        if (data && data.session_id === session_id) {
+          resolvedPlan = data.plan_json;
+        }
+      }
+      if (!resolvedPlan) {
+        const memoryPlan = getPlan(resolvedPlanId);
+        if (memoryPlan && memoryPlan.sessionId === session_id) {
+          resolvedPlan = memoryPlan;
+        }
+      }
+      if (!resolvedPlan) {
+        return res.status(404).json({ error: 'Plan not found' });
       }
     }
 
-    // 3. Check spend cap
     const cap = await checkSpendCap(session_id);
     if (!cap.allowed) {
-      const config = require('../config');
       return res.status(402).json({
-        success: false,
-        error: `Daily spend cap of $${config.dailyCapUSD} reached. Used today: $${cap.todaySpend.toFixed(4)}`,
+        error: cap.message,
         code: 'SPEND_CAP_EXCEEDED',
-        todaySpend: cap.todaySpend,
+        todaySpend: cap.todaySpend
       });
     }
 
-    // 4. Fetch encrypted keys
     const { data: keys, error: keysError } = await supabase
       .from('api_key_vault')
       .select('provider, encrypted_key, iv, auth_tag')
@@ -75,163 +132,56 @@ router.post('/', validate(executeSchema), async (req, res, next) => {
       .is('revoked_at', null);
 
     if (keysError || !keys || keys.length === 0) {
-      return res.status(400).json({ success: false, error: 'No active API keys found' });
+      return res.status(400).json({ error: 'No active API keys found' });
     }
 
-    // Build keyMap
     const keyMap = {};
-    for (const k of keys) {
-      let combinedKey = k.encrypted_key;
-      if (!combinedKey.includes(':') && k.iv && k.auth_tag) {
-        combinedKey = `${k.iv}:${k.auth_tag}:${k.encrypted_key}`;
+    for (const key of keys) {
+      let combined = key.encrypted_key;
+      if (!combined.includes(':') && key.iv && key.auth_tag) {
+        combined = `${key.iv}:${key.auth_tag}:${key.encrypted_key}`;
       }
-      keyMap[k.provider] = combinedKey;
+      keyMap[key.provider] = combined;
     }
 
-    // 5. Fetch availableModels
     const availableModels = await getAvailableModels(session_id);
     if (!availableModels || availableModels.length === 0) {
-      return res.status(400).json({ success: false, error: 'No models available' });
+      return res.status(400).json({ error: 'No models available' });
     }
 
-    // 7. Execute Plan
-    const result = await executePlan(plan, keyMap, availableModels);
+    const result = await executePlan(resolvedPlan, keyMap, availableModels);
+    const response = normalizeExecutionResult(resolvedPlanId, resolvedPlan, result);
 
-    // Demo cache store — only for demo_mode requests
-    if (demo_mode && cacheKey) {
-      demoCache.set(cacheKey, result);
-      setTimeout(() => demoCache.delete(cacheKey), 60 * 60 * 1000); // 60 min TTL
-    }
-
-    // 8. Insert into executions table
-    const executionId = crypto.randomUUID();
-    let promptSnippet = "";
-    if (plan.subtasks && plan.subtasks.length > 0 && plan.subtasks[0].prompt) {
-      promptSnippet = plan.subtasks[0].prompt.slice(0, 500);
-    }
-
-    const { error: insertError } = await supabase
-      .from('executions')
-      .insert({
-        id: executionId,
-        session_id,
-        plan_id,
-        prompt_raw: promptSnippet,
-        prompt_category: plan.category,
-        difficulty: plan.difficulty,
-        models_used: result.subtaskResults.map(r => r.modelUsed),
-        total_input_tokens: result.totalInputTokens,
-        total_output_tokens: result.totalOutputTokens,
-        total_cost_usd: result.totalCostUSD,
-        latency_ms: result.totalLatencyMs,
-        status: result.status,
-        had_fallback: result.subtaskResults.some(r => r.wasFallback),
-        created_at: new Date().toISOString()
-      });
-
-    if (insertError) {
-      console.warn("[executor] Failed to log execution to DB:", insertError);
-    } else {
-      // Fire-and-forget analytics logging — never await this
-      const { logExecution } = require('../db/analytics');
-      logExecution({
-        id: executionId,
-        session_id,
-        category: plan.category,
-        models_used: result.subtaskResults.map(r => r.modelUsed),
-        total_cost_usd: result.totalCostUSD
-      }, result.subtaskResults).catch(err =>
-        console.error('[analytics] Logging failed (non-fatal):', err.message)
-      );
-    }
-
-    // 9. Return 200
-    return res.status(200).json({ success: true, result });
-
-  } catch (error) {
-    console.error('Error in POST /api/execute:', error);
-    next(error);
-=======
-const { getPlan } = require('../core/plan_store');
-const { executePlan } = require('../core/executor');
-const analyticsDb = require('../db/analytics');
-
-function validatePlan(plan) {
-  if (!plan || typeof plan !== 'object') {
-    throw new Error('Plan is required');
-  }
-  if (!Array.isArray(plan.subtasks) || plan.subtasks.length === 0) {
-    throw new Error('Plan subtasks are required');
-  }
-  if (!Array.isArray(plan.availableModels) || plan.availableModels.length === 0) {
-    throw new Error('Plan availableModels are required');
-  }
-}
-
-router.post('/', async (req, res) => {
-  try {
-    const { plan_id, session_id, plan } = req.body || {};
-    if (!session_id) {
-      return res.status(400).json({
-        error: 'Missing required field: session_id'
-      });
-    }
-
-    let resolvedPlan = null;
-    let planId = plan_id || null;
-
-    if (plan) {
-      validatePlan(plan);
-      resolvedPlan = plan;
-      if (!planId) {
-        planId = `inline-${Date.now()}`;
-      }
-    } else {
-      if (!plan_id) {
-        return res.status(400).json({
-          error: 'Provide either plan_id or plan payload'
-        });
-      }
-      const storedPlan = getPlan(plan_id);
-      if (!storedPlan) {
-        return res.status(404).json({
-          error: 'Plan not found. Generate a plan first via POST /api/plan'
-        });
-      }
-      if (storedPlan.sessionId !== session_id) {
-        return res.status(403).json({
-          error: 'Plan does not belong to the provided session_id'
-        });
-      }
-      resolvedPlan = storedPlan;
-      planId = storedPlan.planId || plan_id;
-    }
-
-    const executionResult = await executePlan(resolvedPlan, session_id);
-
-    const analyticsError = await analyticsDb.logExecution({
+    await insertExecutionRecord({
       sessionId: session_id,
-      planId,
-      prompt: resolvedPlan.prompt || null,
+      planId: resolvedPlanId,
+      prompt: resolvedPlan.prompt || '',
       category: resolvedPlan.category || null,
       difficulty: resolvedPlan.difficulty || null,
-      ...executionResult
-    }).then(() => null).catch((error) => error.message);
+      status: response.status,
+      modelsUsed: response.analytics.modelsUsed,
+      totalTokens: response.analytics.totalTokens,
+      totalCost: response.analytics.totalCost,
+      totalTimeMs: response.analytics.totalTimeMs,
+      fallbackEvents: (result.subtaskResults || []).filter((r) => r.wasFallback).map((r) => ({ subtaskId: r.subtaskId, model: r.modelUsed })),
+      confidenceScores: response.subtaskResults.map((r) => ({ id: r.id, score: r.confidenceScore }))
+    }).catch((error) => {
+      console.warn('[execute] Failed to insert execution record:', error.message);
+    });
 
-    return res.json({
-      planId,
-      status: executionResult.status,
-      subtaskResults: executionResult.subtaskResults,
-      finalOutput: executionResult.finalOutput,
-      analytics: executionResult.analytics,
-      warnings: analyticsError ? [`Analytics write failed: ${analyticsError}`] : []
+    analyticsDb.logExecution({
+      id: crypto.randomUUID(),
+      session_id,
+      category: resolvedPlan.category || 'general',
+      models_used: response.analytics.modelsUsed,
+      total_cost_usd: response.analytics.totalCost
+    }, (result.subtaskResults || [])).catch((error) => {
+      console.warn('[execute] Analytics logging failed:', error.message);
     });
+
+    return res.json(response);
   } catch (error) {
-    return res.status(500).json({
-      error: 'Failed to execute plan',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
->>>>>>> backend_engineer
+    return next(error);
   }
 });
 

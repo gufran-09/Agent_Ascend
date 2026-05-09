@@ -5,7 +5,7 @@ import { ArrowUp } from 'lucide-react';
 import { useChatContext } from '../lib/context';
 
 export default function InputBar() {
-  const { sendPrompt, isLoading, isExecuting, connectedProviders, availableModels } = useChatContext();
+  const { sendPrompt, isLoading, isExecuting, availableModels } = useChatContext();
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 

@@ -33,12 +33,17 @@ function modelToProvider(model) {
   throw new Error(`Unsupported model mapping for: ${model}`);
 }
 
+function normalizeModelIds(availableModels) {
+  return availableModels.map((model) => (typeof model === 'string' ? model : model?.id)).filter(Boolean);
+}
+
 function choosePreferredModel(availableModels) {
+  const modelIds = normalizeModelIds(availableModels);
   const preference = ['gpt-4o-mini', 'gemini-1.5-flash', 'claude-3-haiku-20240307', 'gpt-4o'];
   for (const preferred of preference) {
-    if (availableModels.includes(preferred)) return preferred;
+    if (modelIds.includes(preferred)) return preferred;
   }
-  return availableModels[0];
+  return modelIds[0];
 }
 
 async function getProviderKey(sessionId, provider) {
@@ -62,6 +67,7 @@ async function getProviderKey(sessionId, provider) {
 }
 
 function buildHeuristicSubtasks(prompt, availableModels, classification) {
+  const modelIds = normalizeModelIds(availableModels);
   const bestModel = choosePreferredModel(availableModels);
   if (!classification.needsDecomposition) {
     return [{
@@ -80,11 +86,12 @@ function buildHeuristicSubtasks(prompt, availableModels, classification) {
 
   return chunks.map((task, index) => ({
     ...task,
-    assignedModel: availableModels[index % availableModels.length]
+    assignedModel: modelIds[index % modelIds.length]
   }));
 }
 
 function normalizePlan(plan, prompt, availableModels) {
+  const modelIds = normalizeModelIds(availableModels);
   const fallback = classifyPrompt(prompt);
   const category = ['research', 'coding', 'logic', 'creative', 'planning', 'math', 'general'].includes(plan?.category)
     ? plan.category
@@ -98,7 +105,7 @@ function normalizePlan(plan, prompt, availableModels) {
     : buildHeuristicSubtasks(prompt, availableModels, fallback);
 
   const subtasks = rawSubtasks.map((task, idx) => {
-    const assignedModel = availableModels.includes(task.assignedModel) ? task.assignedModel : availableModels[0];
+    const assignedModel = modelIds.includes(task.assignedModel) ? task.assignedModel : modelIds[0];
     return {
       id: Number.isInteger(task.id) ? task.id : idx + 1,
       title: String(task.title || `Subtask ${idx + 1}`),
@@ -172,24 +179,25 @@ async function generatePlan(prompt, availableModels, sessionId) {
     throw new Error('sessionId is required');
   }
 
-  const routingModel = choosePreferredModel(availableModels);
+  const modelIds = normalizeModelIds(availableModels);
+  const routingModel = choosePreferredModel(modelIds);
   const provider = modelToProvider(routingModel);
   let llmPlan = null;
 
   try {
     const decryptedKey = await getProviderKey(sessionId, provider);
     if (provider === 'openai') {
-      llmPlan = await routeWithOpenAI(routingModel, decryptedKey, prompt, availableModels);
+      llmPlan = await routeWithOpenAI(routingModel, decryptedKey, prompt, modelIds);
     } else if (provider === 'anthropic') {
-      llmPlan = await routeWithAnthropic(routingModel, decryptedKey, prompt, availableModels);
+      llmPlan = await routeWithAnthropic(routingModel, decryptedKey, prompt, modelIds);
     } else {
-      llmPlan = await routeWithGemini(routingModel, decryptedKey, prompt, availableModels);
+      llmPlan = await routeWithGemini(routingModel, decryptedKey, prompt, modelIds);
     }
   } catch (_routingError) {
     llmPlan = null;
   }
 
-  const normalized = normalizePlan(llmPlan, prompt, availableModels);
+  const normalized = normalizePlan(llmPlan, prompt, modelIds);
   return {
     ...normalized,
     routerModel: routingModel
