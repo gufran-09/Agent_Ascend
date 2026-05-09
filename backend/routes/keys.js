@@ -48,7 +48,7 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
     const { ciphertext, iv, authTag } = encryptKeyParts(api_key);
     const keyHint = api_key.slice(-4);
 
-    // Store in Supabase
+    // Store in Supabase (session_id maps to user_id in DB)
     const { data: existingKey, error: fetchError } = await supabase
       .from("api_key_vault")
       .select("*")
@@ -85,7 +85,7 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
       const { error: insertError } = await supabase
         .from("api_key_vault")
         .insert({
-          session_id,
+          user_id: session_id,
           provider,
           encrypted_key: ciphertext,
           iv,
@@ -128,7 +128,7 @@ router.get("/models", async (req, res, next) => {
       });
     }
 
-    // Fetch all valid API keys for this session
+    // Fetch all valid API keys for this user
     const { data: keys, error: keysError } = await supabase
       .from("api_key_vault")
       .select("provider")

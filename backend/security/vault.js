@@ -15,9 +15,9 @@ if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length !== 32) {
 const MASTER_KEY = crypto.scryptSync(ENCRYPTION_KEY, "salt", KEY_LENGTH);
 
 /**
- * Encrypt an API key using AES-256-GCM
- * @param {string} plainTextApiKey - The API key to encrypt
- * @returns {string} Encrypted key in format: iv:tag:ciphertext (hex encoded)
+ * "Encrypt" an API key (hackathon: plain text passthrough)
+ * @param {string} plainTextApiKey - The API key
+ * @returns {string} The same key (no encryption)
  */
 function encryptKey(plainTextApiKey) {
   if (!plainTextApiKey || typeof plainTextApiKey !== "string") {
@@ -103,3 +103,4 @@ module.exports = {
   decryptKey,
   decryptKeyParts,
 };
+
