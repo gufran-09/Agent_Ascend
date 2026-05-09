@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../db/supabase');
-const { encryptKey, decryptKey } = require('../security/vault');
+const { encryptKey } = require('../security/vault');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -44,14 +44,16 @@ router.post('/', async (req, res) => {
     const encryptedKey = encryptKey(api_key);
     const keyHint = `...${api_key.slice(-4)}`; // Last 4 chars only
 
-    // Store in Supabase (session_id maps to user_id in DB)
+    // Store in Supabase. Never store or return plaintext keys.
     const { data: existingKey, error: fetchError } = await supabase
       .from('api_key_vault')
       .select('*')
-      .eq('user_id', session_id)
+      .eq('session_id', session_id)
       .eq('provider', provider)
       .is('revoked_at', null)
-      .single();
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
 
     if (existingKey) {
       // Update existing key
@@ -73,7 +75,7 @@ router.post('/', async (req, res) => {
       const { error: insertError } = await supabase
         .from('api_key_vault')
         .insert({
-          user_id: session_id,
+          session_id,
           provider,
           encrypted_key: encryptedKey,
           key_hint: keyHint,
@@ -117,47 +119,7 @@ router.get('/models', async (req, res) => {
       });
     }
 
-    // Fetch all valid API keys for this user
-    const { data: keys, error: keysError } = await supabase
-      .from('api_key_vault')
-      .select('provider, is_valid')
-      .eq('user_id', session_id)
-      .eq('is_valid', true)
-      .is('revoked_at', null);
-
-    if (keysError) throw keysError;
-
-    if (!keys || keys.length === 0) {
-      return res.json({ models: [] });
-    }
-
-    // Get available providers
-    const availableProviders = keys.map(k => k.provider);
-
-    // Fetch models from model_registry for available providers
-    const { data: models, error: modelsError } = await supabase
-      .from('model_registry')
-      .select('*')
-      .in('provider', availableProviders)
-      .eq('is_active', true)
-      .order('provider');
-
-    if (modelsError) throw modelsError;
-
-    // Return model list in contract format
-    const modelList = models.map(model => ({
-      id: model.model_id,
-      provider: model.provider,
-      display_name: model.display_name,
-      strengths: model.strengths,
-      context_window: model.context_window,
-      cost_per_1k_input: parseFloat(model.cost_per_1k_input),
-      cost_per_1k_output: parseFloat(model.cost_per_1k_output),
-      avg_latency_ms: model.avg_latency_ms,
-      supports_streaming: model.supports_streaming,
-      supports_json_mode: model.supports_json_mode
-    }));
-
+    const modelList = await getAvailableModelsForSession(session_id);
     res.json({
       models: modelList,
       count: modelList.length
@@ -171,6 +133,41 @@ router.get('/models', async (req, res) => {
     });
   }
 });
+
+async function getAvailableModelsForSession(sessionId) {
+  const { data: keys, error: keysError } = await supabase
+    .from('api_key_vault')
+    .select('provider, is_valid')
+    .eq('session_id', sessionId)
+    .eq('is_valid', true)
+    .is('revoked_at', null);
+
+  if (keysError) throw keysError;
+  if (!keys || keys.length === 0) return [];
+
+  const availableProviders = [...new Set(keys.map(k => k.provider))];
+  const { data: models, error: modelsError } = await supabase
+    .from('model_registry')
+    .select('*')
+    .in('provider', availableProviders)
+    .eq('is_active', true)
+    .order('provider');
+
+  if (modelsError) throw modelsError;
+
+  return (models || []).map(model => ({
+    id: model.model_id,
+    provider: model.provider,
+    display_name: model.display_name,
+    strengths: model.strengths || [],
+    context_window: model.context_window,
+    cost_per_1k_input: Number(model.cost_per_1k_input || 0),
+    cost_per_1k_output: Number(model.cost_per_1k_output || 0),
+    avg_latency_ms: model.avg_latency_ms,
+    supports_streaming: model.supports_streaming,
+    supports_json_mode: model.supports_json_mode
+  }));
+}
 
 /**
  * Validate an API key with a cheap test call
@@ -231,13 +228,17 @@ async function validateAnthropicKey(apiKey) {
 async function validateGoogleKey(apiKey) {
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    // Cheap test call: list models
-    await genAI.listModels();
+    // Cheap test call. The installed SDK version does not consistently expose
+    // listModels(), so use a tiny generation request for validation.
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    await model.generateContent('Hi');
     return true;
   } catch (error) {
     if (error.status === 401 || error.status === 403) return false;
     throw error;
   }
 }
+
+router.getAvailableModelsForSession = getAvailableModelsForSession;
 
 module.exports = router;

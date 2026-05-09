@@ -54,3 +54,24 @@ INSERT INTO model_registry (model_id, provider, display_name, strengths, context
   ('gemini-1.5-flash', 'google_gemini', 'Gemini 1.5 Flash', ARRAY['fast', 'general', 'multimodal'], 1048576, 0.000075, 0.0003, 250, true, true),
   ('gemini-2.0-flash', 'google_gemini', 'Gemini 2.0 Flash', ARRAY['fast', 'reasoning', 'multimodal', 'coding'], 1048576, 0.0001, 0.0004, 200, true, true)
 ON CONFLICT (model_id) DO NOTHING;
+
+-- 4. Executions — analytics/audit log for each approved plan execution
+CREATE TABLE IF NOT EXISTS executions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  category TEXT,
+  difficulty TEXT,
+  status TEXT NOT NULL CHECK (status IN ('completed', 'partial', 'failed')),
+  models_used TEXT[] DEFAULT '{}',
+  total_tokens INTEGER DEFAULT 0,
+  total_cost NUMERIC(10, 6) DEFAULT 0,
+  total_time_ms INTEGER DEFAULT 0,
+  fallback_events JSONB DEFAULT '[]'::jsonb,
+  confidence_scores JSONB DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_executions_session_created
+  ON executions(session_id, created_at DESC);

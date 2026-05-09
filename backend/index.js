@@ -34,11 +34,13 @@ app.get('/health', (req, res) => {
 
 // Import routes (will be created in later phases)
 const keysRouter = require('./routes/keys');
+const modelsRouter = require('./routes/models');
 const planRouter = require('./routes/plan');
 const executeRouter = require('./routes/execute');
 
 // Include routes
 app.use('/api/keys', keysRouter);
+app.use('/api/models', modelsRouter);
 app.use('/api/plan', planRouter);
 app.use('/api/execute', executeRouter);
 
