@@ -1,175 +1,191 @@
-const crypto = require('crypto');
 const supabase = require('../db/supabase');
-const { classifyPrompt } = require('./classifier');
-const { estimateTokensAndCost, sumEstimates } = require('./token_counter');
+const { decryptKeyParts } = require('../security/vault');
+const { classify } = require('./classifier');
+const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-async function generatePlan(prompt, availableModelIds = [], sessionId) {
-  if (!prompt || typeof prompt !== 'string') throw new Error('Prompt is required');
-  if (!sessionId) throw new Error('sessionId is required');
+async function callLLM(model, provider, systemPrompt, userPrompt, sessionId) {
+  const { data: keyData, error } = await supabase
+    .from('api_key_vault')
+    .select('encrypted_key, iv, auth_tag')
+    .eq('session_id', sessionId)
+    .eq('provider', provider)
+    .eq('is_valid', true)
+    .is('revoked_at', null)
+    .single();
 
-  const models = await fetchAvailableModelRecords(sessionId, availableModelIds);
-  if (models.length === 0) throw new Error('No available models connected for this session');
+  if (error || !keyData) {
+    throw new Error(`Could not retrieve API key for provider ${provider}`);
+  }
 
-  const classification = classifyPrompt(prompt);
-  const subtasks = buildSubtasks(prompt, classification);
+  const apiKey = decryptKeyParts(keyData.encrypted_key, keyData.iv, keyData.auth_tag);
 
-  const plannedSubtasks = subtasks.map((subtask, index) => {
-    const model = chooseBestModel(models, classification.category, index);
-    const estimate = estimateTokensAndCost(subtask.prompt, model, classification.difficulty);
-    return {
-      id: index + 1,
-      title: subtask.title,
-      assignedModel: model.id,
-      prompt: subtask.prompt,
-      estimatedTokens: estimate.tokens,
-      estimatedCost: estimate.cost,
-      estimatedTime: estimate.timeSeconds,
-    };
-  });
+  if (provider === 'openai') {
+    const client = new OpenAI({ apiKey });
+    const response = await client.chat.completions.create({
+      model: model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      response_format: { type: "json_object" }
+    });
+    return response.choices[0].message.content;
+  } else if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: model,
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: userPrompt }
+      ]
+    });
+    return response.content[0].text;
+  } else if (provider === 'google_gemini') {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const genModel = genAI.getGenerativeModel({ model: model, systemInstruction: systemPrompt });
+    const response = await genModel.generateContent(userPrompt);
+    return response.response.text();
+  } else {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
+}
 
-  const totalEstimate = sumEstimates(plannedSubtasks.map(task => ({
-    tokens: task.estimatedTokens,
-    cost: task.estimatedCost,
-    timeSeconds: task.estimatedTime,
-  })));
+async function generatePlan(prompt, availableModels, sessionId) {
+  if (!availableModels || availableModels.length === 0) {
+    throw new Error("No available models to generate plan");
+  }
 
-  const plan = {
-    planId: `plan_${crypto.randomUUID()}`,
-    prompt,
-    category: classification.category,
-    difficulty: classification.difficulty,
-    needsDecomposition: classification.needsDecomposition,
-    availableModels: models.map(model => model.id),
-    subtasks: plannedSubtasks,
-    totalEstimate,
-  };
+  const { category, difficulty, needsDecomposition } = classify(prompt);
 
-  validatePlanModels(plan, models.map(model => model.id));
+  const availableModelsList = availableModels
+    .map(m => `${m.id} (${m.strengths.join(', ')})`)
+    .join('\n');
+
+  const sortedModels = [...availableModels].sort((a, b) => a.inputCostPer1k - b.inputCostPer1k);
+  const metaModel = sortedModels[0];
+
+  const systemPrompt = `You are an AI orchestration router.
+
+AVAILABLE MODELS (you must ONLY use these exact model IDs, no others):
+${availableModelsList}
+
+TASK CATEGORY: ${category}
+DIFFICULTY: ${difficulty}
+NEEDS DECOMPOSITION: ${needsDecomposition}
+
+Return ONLY a valid JSON object. No markdown, no explanation, no code fences.
+
+If needsDecomposition is false, return:
+{
+  "category": "...",
+  "difficulty": "...",
+  "needsDecomposition": false,
+  "subtasks": [
+    {
+      "id": 1,
+      "title": "Direct execution",
+      "assignedModel": "<one exact model ID from available list>",
+      "prompt": "<the original user prompt>",
+      "rationale": "<one sentence: why this model fits this task>"
+    }
+  ]
+}
+
+If needsDecomposition is true, return:
+{
+  "category": "...",
+  "difficulty": "...",
+  "needsDecomposition": true,
+  "subtasks": [
+    {
+      "id": 1,
+      "title": "<short task name>",
+      "assignedModel": "<one exact model ID from available list>",
+      "prompt": "<focused sub-prompt for this model>",
+      "rationale": "<one sentence>",
+      "dependsOn": []
+    },
+    {
+      "id": 2,
+      "title": "<short task name>",
+      "assignedModel": "<one exact model ID from available list>",
+      "prompt": "<sub-prompt, may reference output of subtask 1>",
+      "rationale": "<one sentence>",
+      "dependsOn": [1]
+    }
+  ]
+}`;
+
+  let planJsonStr;
+  let plan;
+
+  try {
+    planJsonStr = await callLLM(metaModel.id, metaModel.provider, systemPrompt, prompt, sessionId);
+    planJsonStr = planJsonStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+    plan = JSON.parse(planJsonStr);
+  } catch (err) {
+    try {
+      const retrySystemPrompt = `${systemPrompt}\n\nCRITICAL: You must return ONLY raw JSON. Do not include markdown formatting or any other text.`;
+      planJsonStr = await callLLM(metaModel.id, metaModel.provider, retrySystemPrompt, prompt, sessionId);
+      planJsonStr = planJsonStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+      plan = JSON.parse(planJsonStr);
+    } catch (retryErr) {
+      plan = {
+        category,
+        difficulty,
+        needsDecomposition: false,
+        subtasks: [
+          {
+            id: 1,
+            title: "Direct execution",
+            assignedModel: metaModel.id,
+            prompt: prompt,
+            rationale: "Fallback plan due to parsing errors",
+            dependsOn: []
+          }
+        ]
+      };
+    }
+  }
+
+  const availableIds = new Set(availableModels.map(m => m.id));
+  
+  if (!plan.subtasks || !Array.isArray(plan.subtasks)) {
+    plan.subtasks = [
+      {
+        id: 1,
+        title: "Direct execution",
+        assignedModel: metaModel.id,
+        prompt: prompt,
+        rationale: "Fallback plan due to invalid structure",
+        dependsOn: []
+      }
+    ];
+  }
+
+  if (plan.needsDecomposition) {
+    const { decompose } = require('./decomposer');
+    plan.subtasks = decompose(plan.subtasks, availableModels);
+  } else {
+    plan.subtasks.forEach(t => { 
+      t.dependsOn = []; 
+      t.wave = 0; 
+      t.canRunInParallel = true; 
+    });
+  }
+
+  for (const task of plan.subtasks) {
+    if (!availableIds.has(task.assignedModel)) {
+      task.assignedModel = metaModel.id;
+      task.repaired = true;
+      console.warn(`[router] Repaired invalid model assignment → ${metaModel.id}`);
+    }
+  }
+
   return plan;
 }
 
-async function fetchAvailableModelRecords(sessionId, requestedModelIds = []) {
-  const { data: keys, error: keysError } = await supabase
-    .from('api_key_vault')
-    .select('provider')
-    .eq('session_id', sessionId)
-    .eq('is_valid', true)
-    .is('revoked_at', null);
-
-  if (keysError) throw keysError;
-  if (!keys || keys.length === 0) return [];
-
-  const providers = [...new Set(keys.map(key => key.provider))];
-  let query = supabase
-    .from('model_registry')
-    .select('*')
-    .in('provider', providers)
-    .eq('is_active', true);
-
-  if (requestedModelIds.length > 0) {
-    query = query.in('model_id', requestedModelIds);
-  }
-
-  const { data: models, error: modelsError } = await query;
-  if (modelsError) throw modelsError;
-
-  return (models || []).map(normalizeModelRecord);
-}
-
-function normalizeModelRecord(model) {
-  return {
-    id: model.model_id,
-    model_id: model.model_id,
-    provider: model.provider,
-    display_name: model.display_name,
-    strengths: model.strengths || [],
-    context_window: model.context_window,
-    cost_per_1k_input: Number(model.cost_per_1k_input || 0),
-    cost_per_1k_output: Number(model.cost_per_1k_output || 0),
-    avg_latency_ms: Number(model.avg_latency_ms || 1000),
-    supports_streaming: Boolean(model.supports_streaming),
-    supports_json_mode: Boolean(model.supports_json_mode),
-  };
-}
-
-function buildSubtasks(prompt, classification) {
-  if (!classification.needsDecomposition) {
-    return [{ title: 'Answer the user request', prompt }];
-  }
-
-  const category = classification.category;
-  if (category === 'coding') {
-    return [
-      { title: 'Analyze requirements and design approach', prompt: `Analyze this coding task and propose the implementation approach:\n\n${prompt}` },
-      { title: 'Implement the core solution', prompt: `Implement the core solution for this task. Include concrete code or file-level guidance:\n\n${prompt}` },
-      { title: 'Validate and identify edge cases', prompt: `Review the solution, list tests, validation steps, and edge cases for:\n\n${prompt}` },
-    ];
-  }
-
-  if (category === 'research') {
-    return [
-      { title: 'Research key facts and context', prompt: `Research the key facts and context for:\n\n${prompt}` },
-      { title: 'Compare options and tradeoffs', prompt: `Compare relevant options, evidence, and tradeoffs for:\n\n${prompt}` },
-      { title: 'Synthesize final recommendation', prompt: `Synthesize a concise final recommendation for:\n\n${prompt}` },
-    ];
-  }
-
-  return [
-    { title: 'Break down the task', prompt: `Break down this request into the important parts:\n\n${prompt}` },
-    { title: 'Solve the main task', prompt: `Solve the main request in detail:\n\n${prompt}` },
-    { title: 'Review and finalize', prompt: `Review the answer for completeness and provide the final response:\n\n${prompt}` },
-  ];
-}
-
-function chooseBestModel(models, category, index = 0) {
-  const preferenceByCategory = {
-    coding: ['coding', 'reasoning', 'analysis'],
-    math: ['reasoning', 'complex-reasoning'],
-    logic: ['reasoning', 'analysis'],
-    research: ['research', 'analysis', 'long-context'],
-    creative: ['writing', 'general'],
-    planning: ['reasoning', 'analysis', 'general'],
-    general: ['fast', 'general'],
-  };
-
-  const preferences = preferenceByCategory[category] || preferenceByCategory.general;
-  const scored = models.map(model => {
-    const strengths = model.strengths || [];
-    const strengthScore = preferences.reduce((score, pref) => score + (strengths.includes(pref) ? 10 : 0), 0);
-    const cheapnessScore = 1 / Math.max(0.000001, model.cost_per_1k_input + model.cost_per_1k_output);
-    const latencyScore = 1 / Math.max(1, model.avg_latency_ms);
-    return { model, score: strengthScore + cheapnessScore * 0.0001 + latencyScore };
-  }).sort((a, b) => b.score - a.score);
-
-  return scored[index % Math.min(scored.length, 2)]?.model || models[0];
-}
-
-function validatePlanModels(plan, availableModelIds) {
-  if (!plan || !Array.isArray(plan.subtasks) || plan.subtasks.length === 0) {
-    throw new Error('Generated plan must include at least one subtask');
-  }
-
-  const allowed = new Set(availableModelIds);
-  for (const task of plan.subtasks) {
-    if (!task.id || !task.title || !task.assignedModel || !task.prompt) {
-      throw new Error('Each subtask must include id, title, assignedModel, and prompt');
-    }
-    if (!allowed.has(task.assignedModel)) {
-      throw new Error(`Plan assigned unavailable model: ${task.assignedModel}`);
-    }
-  }
-
-  if (!plan.totalEstimate || !Number.isFinite(Number(plan.totalEstimate.tokens)) || !Number.isFinite(Number(plan.totalEstimate.cost))) {
-    throw new Error('Plan estimates must be numeric');
-  }
-
-  return true;
-}
-
-module.exports = {
-  generatePlan,
-  fetchAvailableModelRecords,
-  normalizeModelRecord,
-  validatePlanModels,
-  chooseBestModel,
-};
+module.exports = { generatePlan };

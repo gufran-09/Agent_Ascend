@@ -1,15 +1,33 @@
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require("@supabase/supabase-js");
+const config = require("../config");
 
-// Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+const supabase = createClient(config.supabaseUrl, config.supabaseKey);
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables');
-}
+supabase.savePlanVersion = async function(planId, sessionId, planJson, version) {
+  const crypto = require('crypto');
+  const rowId = crypto.randomUUID();
+  const { data, error } = await supabase.from('plans').insert({
+    id: rowId,
+    plan_id: planId,
+    plan_version: version,
+    session_id: sessionId,
+    plan_json: planJson,
+    created_at: new Date().toISOString()
+  });
+  return { data, error, rowId };
+};
 
-const supabaseClient = createClient(supabaseUrl, supabaseKey);
+supabase.getLatestPlan = async function(planId) {
+  const { data, error } = await supabase
+    .from('plans')
+    .select('*')
+    .eq('plan_id', planId)
+    .order('plan_version', { ascending: false })
+    .limit(1)
+    .single();
+  return { data, error };
+};
 
-console.log('✅ Supabase client initialized');
+console.log("✅ Supabase client initialized");
 
-module.exports = supabaseClient;
+module.exports = supabase;

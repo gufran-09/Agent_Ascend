@@ -1,59 +1,28 @@
-const CATEGORY_KEYWORDS = [
-  ['coding', ['code', 'bug', 'debug', 'api', 'react', 'node', 'database', 'sql', 'function', 'component', 'backend', 'frontend', 'typescript', 'javascript', 'python']],
-  ['math', ['calculate', 'equation', 'proof', 'algebra', 'geometry', 'statistics', 'probability', 'derivative', 'integral']],
-  ['research', ['research', 'sources', 'compare', 'summarize', 'market', 'study', 'evidence', 'literature']],
-  ['creative', ['write', 'story', 'poem', 'brand', 'copy', 'creative', 'script', 'tagline']],
-  ['planning', ['plan', 'roadmap', 'steps', 'strategy', 'schedule', 'timeline', 'milestone']],
-  ['logic', ['logic', 'reason', 'deduce', 'puzzle', 'constraint', 'decision', 'evaluate']],
-];
+function classify(prompt) {
+  if (typeof prompt !== 'string') prompt = '';
+  const text = prompt;
+  
+  let category = 'general';
+  if (/\b(code|function|implement|build|debug|fix|api|class|algorithm|script)\b/i.test(text)) category = 'coding';
+  else if (/\b(research|summarize|explain|what is|overview|history|compare)\b/i.test(text)) category = 'research';
+  else if (/\b(plan|roadmap|steps|strategy|breakdown|timeline|organize)\b/i.test(text)) category = 'planning';
+  else if (/\b(calculate|solve|equation|math|formula|proof|compute)\b/i.test(text)) category = 'math';
+  else if (/\b(write|story|poem|creative|draft|generate content|essay)\b/i.test(text)) category = 'creative';
 
-function classifyPrompt(prompt = '') {
-  const text = String(prompt).toLowerCase();
-  const category = detectCategory(text);
-  const difficulty = detectDifficulty(text);
-
-  return {
-    category,
-    difficulty,
-    needsDecomposition: shouldDecompose(prompt, difficulty),
-  };
-}
-
-function detectCategory(text) {
-  let best = { category: 'general', score: 0 };
-  for (const [category, keywords] of CATEGORY_KEYWORDS) {
-    const score = keywords.reduce((count, keyword) => count + (text.includes(keyword) ? 1 : 0), 0);
-    if (score > best.score) best = { category, score };
+  let difficulty = 'easy';
+  if (text.length > 400 || /\b(comprehensive|complete|full|entire|detailed)\b/i.test(text)) {
+    difficulty = 'hard';
+  } else if (text.length >= 150 || /\b(and|also|then|plus|additionally)\b/i.test(text)) {
+    difficulty = 'medium';
   }
-  return best.category;
+
+  const andOccurrences = (text.match(/ and /gi) || []).length;
+  let needsDecomposition = false;
+  if (difficulty === 'hard' || andOccurrences >= 2) {
+    needsDecomposition = true;
+  }
+
+  return { category, difficulty, needsDecomposition };
 }
 
-function detectDifficulty(prompt = '') {
-  const text = String(prompt).toLowerCase();
-  const length = prompt.length;
-  const multiStepSignals = ['step by step', 'full implementation', 'build', 'deploy', 'test', 'integrate', 'architecture', 'end-to-end', 'e2e'];
-  const hardSignals = ['complex', 'comprehensive', 'production', 'optimize', 'refactor', 'security', 'scalable'];
-
-  const multiStepCount = multiStepSignals.filter(signal => text.includes(signal)).length;
-  const hardCount = hardSignals.filter(signal => text.includes(signal)).length;
-
-  if (length > 1200 || multiStepCount >= 3) return 'agentic';
-  if (length > 700 || hardCount >= 2 || multiStepCount >= 2) return 'hard';
-  if (length > 240 || hardCount >= 1 || multiStepCount >= 1) return 'medium';
-  return 'easy';
-}
-
-function shouldDecompose(prompt = '', difficulty = 'medium') {
-  const text = String(prompt).toLowerCase();
-  return ['hard', 'agentic'].includes(difficulty) ||
-    text.includes('step by step') ||
-    text.includes('break down') ||
-    text.includes('multiple') ||
-    text.includes('end-to-end');
-}
-
-module.exports = {
-  classifyPrompt,
-  detectDifficulty,
-  shouldDecompose,
-};
+module.exports = { classify };
