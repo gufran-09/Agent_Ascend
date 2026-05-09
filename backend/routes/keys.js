@@ -47,32 +47,6 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
       }
 
       return next(error);
-    // Validate input
-    if (!provider || !api_key || !session_id) {
-      return res.status(400).json({
-        error: 'Missing required fields: provider, api_key, session_id'
-      });
-    }
-
-    const sessionError = requireValidSessionId(session_id);
-    if (sessionError) return res.status(400).json({ error: sessionError });
-
-    const validProviders = ['openai', 'anthropic', 'google_gemini'];
-    if (!validProviders.includes(provider)) {
-      return res.status(400).json({
-        error: `Invalid provider. Must be one of: ${validProviders.join(', ')}`
-      });
-    }
-
-    // Validate API key with a cheap test call
-    let isValid = false;
-    let validationError = null;
-
-    try {
-      isValid = await validateApiKey(provider, api_key);
-    } catch (error) {
-      validationError = error.message;
-      console.error(`Key validation failed for ${provider}:`, error.message);
     }
 
     const { ciphertext, iv, authTag } = encryptKeyParts(api_key);
@@ -80,12 +54,6 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
 
     // Store in Supabase. Never store or return plaintext keys.
     const { data: existingKey, error: fetchError } = await supabase
-      .from("api_key_vault")
-      .select("*")
-      .eq("session_id", session_id)
-      .eq("provider", provider)
-      .is("revoked_at", null)
-      .single();
       .from('api_key_vault')
       .select('*')
       .eq('session_id', session_id)
@@ -94,10 +62,6 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
       .maybeSingle();
 
     if (fetchError) throw fetchError;
-
-    if (fetchError && fetchError.code !== "PGRST116") {
-      throw fetchError;
-    }
 
     const validatedAt = new Date().toISOString();
 
@@ -124,7 +88,6 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
         .from("api_key_vault")
         .insert({
           user_id: null,
-          session_id,
           session_id,
           provider,
           encrypted_key: ciphertext,
@@ -207,10 +170,6 @@ router.get("/models", async (req, res, next) => {
       supports_streaming: model.supports_streaming,
     }));
 
-    const sessionError = requireValidSessionId(session_id);
-    if (sessionError) return res.status(400).json({ error: sessionError });
-
-    const modelList = await getAvailableModelsForSession(session_id);
     res.json({
       success: true,
       count: modelList.length,
@@ -339,29 +298,10 @@ async function validateGoogleKey(apiKey) {
       throw mapProviderError(error);
     }
   }
-
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
-    );
-
-    if (response.ok) {
-      return true;
-    }
-
-    const error = new Error("Gemini model validation failed");
-    error.status = response.status;
-    throw error;
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    // Cheap test call. The installed SDK version does not consistently expose
-    // listModels(), so use a tiny generation request for validation.
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    await model.generateContent('Hi');
-    return true;
-  } catch (error) {
-    throw mapProviderError(error);
+  if (lastError) {
+    throw mapProviderError(lastError);
   }
+  throw new Error("No Gemini models available or key invalid.");
 }
 
 async function ensureSession(sessionId, req) {
