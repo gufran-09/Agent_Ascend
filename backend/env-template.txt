@@ -1,0 +1,11 @@
+# Supabase Configuration
+SUPABASE_URL=https://xxxx.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGciOiJ...
+
+# Encryption Key (exactly 32 characters for AES-256)
+ENCRYPTION_KEY=hackathon_secret_key_32chars_xx
+
+# Server Configuration
+PORT=8000
+
+# Copy this file to .env and fill in your actual values
