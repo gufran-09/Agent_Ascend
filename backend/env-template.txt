@@ -3,7 +3,7 @@ SUPABASE_URL=https://xxxx.supabase.co
 SUPABASE_SERVICE_KEY=eyJhbGciOiJ...
 
 # Encryption Key (exactly 32 characters for AES-256)
-ENCRYPTION_KEY=hackathon_secret_key_32chars_xx
+ENCRYPTION_KEY=hackathon_secret_key_32chars_xyz
 
 # Server Configuration
 PORT=8000
