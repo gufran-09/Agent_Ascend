@@ -37,10 +37,31 @@ Backend server for the BYO-LLM multi-model orchestration platform.
 - `GET /api/models?session_id=xxx` - Get available models
 
 ### Phase 3: Router LLM Brain
-- `POST /api/plan` - Generate execution plan
+- `POST /api/plan` - Generate execution plan (returns `planId`, subtasks, estimates)
 
 ### Phase 4: Execution Engine
-- `POST /api/execute` - Execute approved plan
+- `POST /api/execute` - Execute approved plan (with fallback + analytics summary)
+
+## Endpoint request contracts
+
+### POST `/api/plan`
+Body:
+```json
+{
+  "session_id": "uuid",
+  "prompt": "Build a market research report",
+  "available_models": ["gpt-4o", "claude-sonnet"]
+}
+```
+
+### POST `/api/execute`
+Body (recommended):
+```json
+{
+  "session_id": "uuid",
+  "plan_id": "uuid-from-api-plan"
+}
+```
 
 ## Project Structure
 

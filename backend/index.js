@@ -78,6 +78,7 @@ const executeRouter = require('./routes/execute');
 const historyRouter = require('./routes/history');
 const analyticsRouter = require('./routes/analytics');
 
+<<<<<<< HEAD
 // Mount routes with per-route rate limiters
 app.use('/api/keys', keysLimiter, keysRouter);
 app.use('/api/models', readLimiter, modelsRouter);
@@ -85,6 +86,22 @@ app.use('/api/plan', planLimiter, planRouter);
 app.use('/api/execute', executeLimiter, executeRouter);
 app.use('/api/history', readLimiter, historyRouter);
 app.use('/api/analytics', readLimiter, analyticsRouter);
+=======
+const planLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60
+});
+
+const executeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10
+});
+
+// Include routes
+app.use('/api', keysRouter);
+app.use('/api/plan', planLimiter, planRouter);
+app.use('/api/execute', executeLimiter, executeRouter);
+>>>>>>> backend_engineer
 
 // Error handling middleware (must be last)
 app.use(errorHandler);

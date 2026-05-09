@@ -9,19 +9,31 @@ const Anthropic = require("@anthropic-ai/sdk");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const router = express.Router();
+<<<<<<< HEAD
 
 const keySchema = z.object({
   session_id: z.string().uuid(),
   provider: z.enum(["openai", "anthropic", "google_gemini"]),
   api_key: z.string().min(10),
 });
+=======
+const supabase = require('../db/supabase');
+const { encryptKey } = require('../security/vault');
+const OpenAI = require('openai');
+const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+>>>>>>> backend_engineer
 
 /**
  * POST /api/keys
  * Submit and validate an API key for a provider
  * Body: { provider: "openai"|"anthropic"|"google_gemini", api_key: "sk-...", session_id: "uuid" }
  */
+<<<<<<< HEAD
 router.post("/", validate(keySchema), async (req, res, next) => {
+=======
+router.post('/keys', async (req, res) => {
+>>>>>>> backend_engineer
   try {
     const { provider, api_key, session_id } = req.body;
 
@@ -204,6 +216,10 @@ async function validateApiKey(provider, apiKey) {
 async function validateOpenAIKey(apiKey) {
   try {
     const client = new OpenAI({ apiKey });
+<<<<<<< HEAD
+=======
+    // Cheap test call: list models (minimal cost)
+>>>>>>> backend_engineer
     await client.models.list();
     return true;
   } catch (error) {
