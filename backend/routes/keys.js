@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const { z } = require("zod");
 const validate = require("../middleware/validate");
 const supabase = require("../db/supabase");
@@ -23,6 +24,8 @@ const keySchema = z.object({
 router.post("/keys", validate(keySchema), async (req, res, next) => {
   try {
     const { provider, api_key, session_id } = req.body;
+
+    await ensureSession(session_id, req);
 
     try {
       await validateApiKey(provider, api_key);
@@ -54,7 +57,7 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
       .select("*")
       .eq("session_id", session_id)
       .eq("provider", provider)
-      .eq("revoked_at", null)
+      .is("revoked_at", null)
       .single();
 
     if (fetchError && fetchError.code !== "PGRST116") {
@@ -85,7 +88,8 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
       const { error: insertError } = await supabase
         .from("api_key_vault")
         .insert({
-          user_id: session_id,
+          user_id: null,
+          session_id,
           provider,
           encrypted_key: ciphertext,
           iv,
@@ -134,7 +138,7 @@ router.get("/models", async (req, res, next) => {
       .select("provider")
       .eq("session_id", session_id)
       .eq("is_valid", true)
-      .eq("revoked_at", null);
+      .is("revoked_at", null);
 
     if (keysError) throw keysError;
 
@@ -233,13 +237,72 @@ async function validateAnthropicKey(apiKey) {
  * Validate Google Gemini API key
  */
 async function validateGoogleKey(apiKey) {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const candidates = [
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-1.0-pro",
+    "gemini-pro",
+  ];
+
+  let lastError = null;
+
+  for (const modelId of candidates) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelId });
+      await model.generateContent("hi");
+      return true;
+    } catch (error) {
+      lastError = error;
+      const status = error.status || error.statusCode;
+      const message = String(error.message || "").toLowerCase();
+
+      if (status === 404 || message.includes("not found")) {
+        continue;
+      }
+
+      throw mapProviderError(error);
+    }
+  }
+
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    await model.generateContent("hi");
-    return true;
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+    );
+
+    if (response.ok) {
+      return true;
+    }
+
+    const error = new Error("Gemini model validation failed");
+    error.status = response.status;
+    throw error;
   } catch (error) {
     throw mapProviderError(error);
+  }
+}
+
+async function ensureSession(sessionId, req) {
+  const expiresAt = new Date(
+    Date.now() + 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const tokenHash = crypto.randomBytes(32).toString("hex");
+
+  const { error } = await supabase.from("sessions").upsert(
+    {
+      id: sessionId,
+      user_id: null,
+      token_hash: tokenHash,
+      ip_address: req.ip || null,
+      user_agent: req.get("user-agent") || null,
+      expires_at: expiresAt,
+      revoked_at: null,
+    },
+    { onConflict: "id" },
+  );
+
+  if (error) {
+    throw error;
   }
 }
 
