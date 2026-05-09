@@ -5,7 +5,7 @@ import { useChatContext } from '../../lib/context';
 import { formatCost, formatTokensShort, getModelColor, getCategoryLabel, getDifficultyColor } from '../../lib/utils';
 
 export default function PlanMessage({ message }: { message: PlanMessageData }) {
-  const { approvePlan, activeChatId, isExecuting } = useChatContext();
+  const { approvePlan, cancelPlan, activeChatId, isExecuting } = useChatContext();
   const { plan } = message;
 
   const handleApprove = () => {
@@ -66,7 +66,9 @@ export default function PlanMessage({ message }: { message: PlanMessageData }) {
         </div>
 
         <div className="msg-plan-actions">
-          <button className="btn-ghost" disabled={isExecuting}>
+          <button className="btn-ghost" disabled={isExecuting} onClick={() => {
+            if (activeChatId) cancelPlan(activeChatId, message.id);
+          }}>
             Cancel
           </button>
           <button className="btn-primary" onClick={handleApprove} disabled={isExecuting}>

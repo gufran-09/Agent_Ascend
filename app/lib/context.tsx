@@ -20,6 +20,7 @@ interface ChatContextType extends AppState {
   refreshModels: () => Promise<void>;
   checkBackend: () => Promise<void>;
   logout: () => Promise<void>;
+  cancelPlan: (chatId: string, messageId: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | null>(null);
@@ -249,6 +250,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [state.sessionId, addMessage, updateMessage]);
 
+  const cancelPlan = useCallback((chatId: string, messageId: string) => {
+    setState(prev => ({
+      ...prev,
+      chats: prev.chats.map(c =>
+        c.id === chatId
+          ? {
+              ...c,
+              messages: c.messages.filter(m => m.id !== messageId),
+            }
+          : c
+      ),
+    }));
+  }, []);
+
   const connectProvider = useCallback(async (provider: string, apiKey: string) => {
     const result = await api.submitKey(provider, apiKey, state.sessionId);
     setState(prev => ({
@@ -302,6 +317,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       refreshModels,
       checkBackend,
       logout,
+      cancelPlan,
     }}>
       {children}
     </ChatContext.Provider>
