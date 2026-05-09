@@ -120,7 +120,7 @@ export default function SettingsPage() {
   return (
     <div className="settings-page">
       <div className="settings-topbar">
-        <Link href="/" className="settings-back">
+        <Link href="/chat" className="settings-back">
           <ArrowLeft size={16} />
           Back to Chat
         </Link>
