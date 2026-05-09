@@ -16,18 +16,18 @@ const keySchema = z.object({
   api_key: z.string().min(10),
 });
 
-
 /**
  * POST /api/keys
  * Submit and validate an API key for a provider
  * Body: { provider: "openai"|"anthropic"|"google_gemini", api_key: "sk-...", session_id: "uuid" }
  */
-router.post("/keys", validate(keySchema), async (req, res, next) => {
+router.post("/", validate(keySchema), async (req, res, next) => {
   try {
     const { provider, api_key, session_id } = req.body;
 
     await ensureSession(session_id, req);
 
+    // Validate API key with a cheap test call
     try {
       await validateApiKey(provider, api_key);
     } catch (error) {
@@ -47,53 +47,19 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
       }
 
       return next(error);
-    // Validate input
-    if (!provider || !api_key || !session_id) {
-      return res.status(400).json({
-        error: 'Missing required fields: provider, api_key, session_id'
-      });
-    }
-
-    const sessionError = requireValidSessionId(session_id);
-    if (sessionError) return res.status(400).json({ error: sessionError });
-
-    const validProviders = ['openai', 'anthropic', 'google_gemini'];
-    if (!validProviders.includes(provider)) {
-      return res.status(400).json({
-        error: `Invalid provider. Must be one of: ${validProviders.join(', ')}`
-      });
-    }
-
-    // Validate API key with a cheap test call
-    let isValid = false;
-    let validationError = null;
-
-    try {
-      isValid = await validateApiKey(provider, api_key);
-    } catch (error) {
-      validationError = error.message;
-      console.error(`Key validation failed for ${provider}:`, error.message);
     }
 
     const { ciphertext, iv, authTag } = encryptKeyParts(api_key);
     const keyHint = api_key.slice(-4);
 
-    // Store in Supabase. Never store or return plaintext keys.
+    // Check for existing key for this provider+session
     const { data: existingKey, error: fetchError } = await supabase
       .from("api_key_vault")
       .select("*")
       .eq("session_id", session_id)
       .eq("provider", provider)
       .is("revoked_at", null)
-      .single()
-      .from('api_key_vault')
-      .select('*')
-      .eq('session_id', session_id)
-      .eq('provider', provider)
-      .is('revoked_at', null)
       .maybeSingle();
-
-    if (fetchError) throw fetchError;
 
     if (fetchError && fetchError.code !== "PGRST116") {
       throw fetchError;
@@ -124,7 +90,6 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
         .from("api_key_vault")
         .insert({
           user_id: null,
-          session_id,
           session_id,
           provider,
           encrypted_key: ciphertext,
@@ -157,6 +122,8 @@ router.post("/keys", validate(keySchema), async (req, res, next) => {
  * Return available models for a session (only models with valid keys)
  */
 router.get("/models", async (req, res, next) => {
+  // NOTE: This sub-route is accessed via the keys router but also mounted
+  // separately at /api/models. Both paths work.
   try {
     const { session_id } = req.query;
 
@@ -164,57 +131,15 @@ router.get("/models", async (req, res, next) => {
     if (!sessionCheck.success) {
       return res.status(400).json({
         success: false,
-        error: "Invalid session_id",
+        error: "Invalid or missing session_id",
       });
     }
 
-    // Fetch all valid API keys for this user
-    const { data: keys, error: keysError } = await supabase
-      .from("api_key_vault")
-      .select("provider")
-      .eq("session_id", session_id)
-      .eq("is_valid", true)
-      .is("revoked_at", null);
-
-    if (keysError) throw keysError;
-
-    if (!keys || keys.length === 0) {
-      return res.json({ success: true, count: 0, models: [] });
-    }
-
-    // Get available providers
-    const availableProviders = keys.map((k) => k.provider);
-
-    // Fetch models from model_registry for available providers
-    const { data: models, error: modelsError } = await supabase
-      .from("model_registry")
-      .select("*")
-      .in("provider", availableProviders)
-      .eq("is_active", true)
-      .order("provider");
-
-    if (modelsError) throw modelsError;
-
-    // Return model list in contract format
-    const modelList = models.map((model) => ({
-      id: model.model_id,
-      provider: model.provider,
-      display_name: model.display_name,
-      strengths: model.strengths,
-      context_window: model.context_window,
-      input_cost_per_1k: parseFloat(model.cost_per_1k_input),
-      output_cost_per_1k: parseFloat(model.cost_per_1k_output),
-      supports_streaming: model.supports_streaming,
-    }));
-
-    const sessionError = requireValidSessionId(session_id);
-    if (sessionError) return res.status(400).json({ error: sessionError });
-
-    const modelList = await getAvailableModelsForSession(session_id);
+    const models = await getAvailableModelsForSession(session_id);
     res.json({
       success: true,
-      count: modelList.length,
-      models: modelList,
+      count: models.length,
+      models,
     });
   } catch (error) {
     console.error("Error in GET /api/models:", error.message);
@@ -225,7 +150,7 @@ router.get("/models", async (req, res, next) => {
 async function getAvailableModelsForSession(sessionId) {
   const { data: keys, error: keysError } = await supabase
     .from('api_key_vault')
-    .select('provider, is_valid')
+    .select('provider')
     .eq('session_id', sessionId)
     .eq('is_valid', true)
     .is('revoked_at', null);
@@ -247,8 +172,11 @@ async function getAvailableModelsForSession(sessionId) {
     id: model.model_id,
     provider: model.provider,
     display_name: model.display_name,
+    displayName: model.display_name,
     strengths: model.strengths || [],
     context_window: model.context_window,
+    inputCostPer1k: Number(model.cost_per_1k_input || 0),
+    outputCostPer1k: Number(model.cost_per_1k_output || 0),
     cost_per_1k_input: Number(model.cost_per_1k_input || 0),
     cost_per_1k_output: Number(model.cost_per_1k_output || 0),
     avg_latency_ms: model.avg_latency_ms,
@@ -259,9 +187,6 @@ async function getAvailableModelsForSession(sessionId) {
 
 /**
  * Validate an API key with a cheap test call
- * @param {string} provider - The provider name
- * @param {string} apiKey - The API key to validate
- * @returns {Promise<boolean>} - True if valid, false otherwise
  */
 async function validateApiKey(provider, apiKey) {
   switch (provider) {
@@ -276,13 +201,9 @@ async function validateApiKey(provider, apiKey) {
   }
 }
 
-/**
- * Validate OpenAI API key
- */
 async function validateOpenAIKey(apiKey) {
   try {
     const client = new OpenAI({ apiKey });
-    // Cheap test call: list models (minimal cost)
     await client.models.list();
     return true;
   } catch (error) {
@@ -290,13 +211,9 @@ async function validateOpenAIKey(apiKey) {
   }
 }
 
-/**
- * Validate Anthropic API key
- */
 async function validateAnthropicKey(apiKey) {
   try {
     const client = new Anthropic({ apiKey });
-    // Cheap test call: list models
     await client.messages.create({
       model: "claude-3-haiku-20240307",
       max_tokens: 1,
@@ -308,9 +225,6 @@ async function validateAnthropicKey(apiKey) {
   }
 }
 
-/**
- * Validate Google Gemini API key
- */
 async function validateGoogleKey(apiKey) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const candidates = [
@@ -340,6 +254,7 @@ async function validateGoogleKey(apiKey) {
     }
   }
 
+  // Fallback: try listing models via REST
   try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
@@ -351,16 +266,10 @@ async function validateGoogleKey(apiKey) {
 
     const error = new Error("Gemini model validation failed");
     error.status = response.status;
-    throw error;
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    // Cheap test call. The installed SDK version does not consistently expose
-    // listModels(), so use a tiny generation request for validation.
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    await model.generateContent('Hi');
-    return true;
-  } catch (error) {
     throw mapProviderError(error);
+  } catch (error) {
+    if (error.code === "INVALID_API_KEY") throw error;
+    throw mapProviderError(lastError || error);
   }
 }
 

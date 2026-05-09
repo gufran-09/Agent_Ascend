@@ -1,8 +1,9 @@
 "use strict";
 
-function validate(schema) {
+function validate(schema, source = 'body') {
   return (req, res, next) => {
-    const result = schema.safeParse(req.body);
+    const dataToValidate = req[source];
+    const result = schema.safeParse(dataToValidate);
 
     if (!result.success) {
       return res.status(400).json({
@@ -12,7 +13,12 @@ function validate(schema) {
       });
     }
 
-    req.body = result.data;
+    if (source === 'body') {
+      req.body = result.data;
+    } else {
+      Object.keys(req[source]).forEach(k => delete req[source][k]);
+      Object.assign(req[source], result.data);
+    }
     return next();
   };
 }

@@ -21,12 +21,14 @@ app.use(
   }),
 );
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+// Global fallback rate limit (generous)
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
-app.use(limiter);
+app.use(globalLimiter);
 
 // Body parsing
 app.use(express.json({ limit: "1mb" }));
@@ -39,19 +41,52 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Import routes (will be created in later phases)
+// ──────────────────────────────────────────────
+// Per-route rate limiters
+// ──────────────────────────────────────────────
+const planLimiter = rateLimit({
+  windowMs: 60 * 1000,       // 1 minute
+  max: 60,                    // 60 req/min per IP
+  message: { success: false, error: 'Rate limit exceeded for /api/plan' }
+});
+
+const executeLimiter = rateLimit({
+  windowMs: 60 * 1000,       // 1 minute
+  max: 10,                    // 10 req/min per IP — expensive endpoint
+  message: { success: false, error: 'Rate limit exceeded for /api/execute' }
+});
+
+const keysLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,  // 10 minutes
+  max: 20,                    // 20 req/10min per IP
+  message: { success: false, error: 'Rate limit exceeded for /api/keys' }
+});
+
+const readLimiter = rateLimit({
+  windowMs: 60 * 1000,       // 1 minute
+  max: 120,                   // 120 req/min per IP — read-heavy
+  message: { success: false, error: 'Rate limit exceeded' }
+});
+
+// ──────────────────────────────────────────────
+// Import routes
+// ──────────────────────────────────────────────
 const keysRouter = require('./routes/keys');
 const modelsRouter = require('./routes/models');
 const planRouter = require('./routes/plan');
 const executeRouter = require('./routes/execute');
+const historyRouter = require('./routes/history');
+const analyticsRouter = require('./routes/analytics');
 
-// Include routes
-app.use('/api/keys', keysRouter);
-app.use('/api/models', modelsRouter);
-app.use('/api/plan', planRouter);
-app.use('/api/execute', executeRouter);
+// Mount routes with per-route rate limiters
+app.use('/api/keys', keysLimiter, keysRouter);
+app.use('/api/models', readLimiter, modelsRouter);
+app.use('/api/plan', planLimiter, planRouter);
+app.use('/api/execute', executeLimiter, executeRouter);
+app.use('/api/history', readLimiter, historyRouter);
+app.use('/api/analytics', readLimiter, analyticsRouter);
 
-// Error handling middleware
+// Error handling middleware (must be last)
 app.use(errorHandler);
 
 // Start server

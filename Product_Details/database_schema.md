@@ -581,3 +581,201 @@ For questions about the schema:
 - Review `Database_LLM_System_Design.md` for detailed design rationale
 - Check `LLM_Database_Schema.md` for original schema documentation
 - Contact backend team (M1) for implementation details
+
+
+
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.api_key_vault (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid,
+  provider USER-DEFINED NOT NULL,
+  encrypted_key text NOT NULL,
+  iv character varying NOT NULL,
+  auth_tag character varying NOT NULL,
+  key_hint character varying,
+  is_valid boolean DEFAULT false,
+  last_validated_at timestamp with time zone,
+  validation_error text,
+  rotated_at timestamp with time zone,
+  revoked_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  session_id uuid,
+  CONSTRAINT api_key_vault_pkey PRIMARY KEY (id),
+  CONSTRAINT api_key_vault_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT api_key_vault_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id)
+);
+CREATE TABLE public.audit_logs (
+  id bigint NOT NULL DEFAULT nextval('audit_logs_id_seq'::regclass),
+  user_id uuid,
+  action character varying NOT NULL,
+  resource_type character varying,
+  resource_id uuid,
+  ip_address inet,
+  metadata jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT audit_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT audit_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.confidence_scores (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  subtask_id uuid,
+  execution_id uuid,
+  scorer_model_id uuid,
+  score smallint NOT NULL CHECK (score >= 0 AND score <= 100),
+  note text,
+  raw_response jsonb,
+  scorer_cost_usd numeric,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT confidence_scores_pkey PRIMARY KEY (id),
+  CONSTRAINT confidence_scores_subtask_id_fkey FOREIGN KEY (subtask_id) REFERENCES public.subtasks(id),
+  CONSTRAINT confidence_scores_execution_id_fkey FOREIGN KEY (execution_id) REFERENCES public.executions(id),
+  CONSTRAINT confidence_scores_scorer_model_id_fkey FOREIGN KEY (scorer_model_id) REFERENCES public.model_registry(id)
+);
+CREATE TABLE public.execution_plans (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  execution_id uuid,
+  version smallint NOT NULL DEFAULT 1,
+  plan_json jsonb NOT NULL,
+  is_approved boolean DEFAULT false,
+  approved_by uuid,
+  approved_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT execution_plans_pkey PRIMARY KEY (id),
+  CONSTRAINT execution_plans_execution_id_fkey FOREIGN KEY (execution_id) REFERENCES public.executions(id),
+  CONSTRAINT execution_plans_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id)
+);
+CREATE TABLE public.executions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid,
+  session_id uuid,
+  prompt_raw text NOT NULL,
+  prompt_category USER-DEFINED,
+  difficulty USER-DEFINED,
+  status USER-DEFINED DEFAULT 'pending'::execution_status_enum,
+  available_models jsonb NOT NULL,
+  router_model_id uuid,
+  final_output text,
+  total_tokens_in integer,
+  total_tokens_out integer,
+  estimated_cost_usd numeric,
+  total_cost_usd numeric,
+  latency_ms integer,
+  user_approved_at timestamp with time zone,
+  started_at timestamp with time zone,
+  completed_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT executions_pkey PRIMARY KEY (id),
+  CONSTRAINT executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT executions_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id),
+  CONSTRAINT executions_router_model_id_fkey FOREIGN KEY (router_model_id) REFERENCES public.model_registry(id)
+);
+CREATE TABLE public.model_registry (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  provider USER-DEFINED NOT NULL,
+  model_id character varying NOT NULL UNIQUE,
+  display_name character varying NOT NULL,
+  strengths jsonb,
+  context_window integer NOT NULL,
+  cost_per_1k_input numeric NOT NULL,
+  cost_per_1k_output numeric NOT NULL,
+  avg_latency_ms integer,
+  supports_streaming boolean DEFAULT true,
+  supports_json_mode boolean DEFAULT false,
+  is_active boolean DEFAULT true,
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT model_registry_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.model_usage_stats (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid,
+  model_id uuid,
+  period_date date NOT NULL,
+  call_count integer DEFAULT 0,
+  total_tokens_in bigint DEFAULT 0,
+  total_tokens_out bigint DEFAULT 0,
+  total_cost_usd numeric DEFAULT 0,
+  avg_latency_ms integer,
+  fallback_count integer DEFAULT 0,
+  avg_confidence_score numeric,
+  CONSTRAINT model_usage_stats_pkey PRIMARY KEY (id),
+  CONSTRAINT model_usage_stats_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT model_usage_stats_model_id_fkey FOREIGN KEY (model_id) REFERENCES public.model_registry(id)
+);
+CREATE TABLE public.plans (
+  id uuid NOT NULL,
+  plan_id uuid NOT NULL,
+  plan_version integer NOT NULL,
+  session_id uuid NOT NULL,
+  plan_json jsonb NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT plans_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.prompt_templates (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid,
+  name character varying NOT NULL,
+  category USER-DEFINED,
+  template_body text NOT NULL,
+  variables jsonb,
+  is_public boolean DEFAULT false,
+  usage_count integer DEFAULT 0,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT prompt_templates_pkey PRIMARY KEY (id),
+  CONSTRAINT prompt_templates_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.sessions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid,
+  token_hash character varying NOT NULL UNIQUE,
+  ip_address inet,
+  user_agent text,
+  expires_at timestamp with time zone NOT NULL,
+  revoked_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT sessions_pkey PRIMARY KEY (id),
+  CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.subtasks (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  execution_id uuid,
+  plan_id uuid,
+  sequence_order smallint NOT NULL,
+  title character varying NOT NULL,
+  prompt_fragment text NOT NULL,
+  assigned_model_id uuid,
+  fallback_model_id uuid,
+  model_used_id uuid,
+  status USER-DEFINED DEFAULT 'pending'::subtask_status_enum,
+  output text,
+  tokens_in integer,
+  tokens_out integer,
+  cost_usd numeric,
+  latency_ms integer,
+  fallback_triggered boolean DEFAULT false,
+  error_message text,
+  started_at timestamp with time zone,
+  completed_at timestamp with time zone,
+  CONSTRAINT subtasks_pkey PRIMARY KEY (id),
+  CONSTRAINT subtasks_execution_id_fkey FOREIGN KEY (execution_id) REFERENCES public.executions(id),
+  CONSTRAINT subtasks_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.execution_plans(id),
+  CONSTRAINT subtasks_assigned_model_id_fkey FOREIGN KEY (assigned_model_id) REFERENCES public.model_registry(id),
+  CONSTRAINT subtasks_fallback_model_id_fkey FOREIGN KEY (fallback_model_id) REFERENCES public.model_registry(id),
+  CONSTRAINT subtasks_model_used_id_fkey FOREIGN KEY (model_used_id) REFERENCES public.model_registry(id)
+);
+CREATE TABLE public.users (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  email character varying NOT NULL UNIQUE,
+  display_name character varying,
+  avatar_url text,
+  plan USER-DEFINED DEFAULT 'free'::user_plan_enum,
+  is_active boolean DEFAULT true,
+  daily_spend_cap_usd numeric DEFAULT 10.00,
+  last_login_at timestamp with time zone,
+  deleted_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT users_pkey PRIMARY KEY (id)
+);

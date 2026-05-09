@@ -14,7 +14,7 @@ const planSchema = z.object({
   prompt: z.string().min(3).max(10000)
 });
 
-router.post('/plan', validate(planSchema), async (req, res, next) => {
+router.post('/', validate(planSchema), async (req, res, next) => {
   try {
     const { session_id, prompt } = req.body;
 
@@ -69,7 +69,7 @@ const editSchema = z.object({
   }))
 });
 
-router.post('/plan/:planId/edit', validate(editSchema), async (req, res, next) => {
+router.post('/:planId/edit', validate(editSchema), async (req, res, next) => {
   try {
     const { planId } = req.params;
     const { session_id, edits } = req.body;
