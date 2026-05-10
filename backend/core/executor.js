@@ -36,8 +36,33 @@ async function callLLMProvider(provider, modelId, apiKey, prompt) {
 
   if (provider === 'google_gemini') {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: modelId });
-    const result = await model.generateContent(prompt);
+    let result;
+    try {
+      const model = genAI.getGenerativeModel({ model: modelId });
+      result = await model.generateContent(prompt);
+    } catch (err) {
+      if (err.message.includes('404')) {
+        console.warn(`[executor] ${modelId} returned 404. Attempting automatic fallbacks...`);
+        const fallbacks = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-flash-latest'];
+        let success = false;
+        let lastErr = err;
+        for (const fallbackId of fallbacks) {
+          if (fallbackId === modelId) continue;
+          try {
+            const fbModel = genAI.getGenerativeModel({ model: fallbackId });
+            result = await fbModel.generateContent(prompt);
+            success = true;
+            break;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        if (!success) throw lastErr;
+      } else {
+        throw err;
+      }
+    }
+
     return {
       text: result.response.text() || '',
       usage: {
@@ -52,11 +77,15 @@ async function callLLMProvider(provider, modelId, apiKey, prompt) {
 
 async function executeSubtask(subtask, availableModels, keyMap, category) {
   const modelsToTry = getFallbackOrder(category, subtask.assignedModel, availableModels);
+  const errors = [];
 
   for (const modelId of modelsToTry) {
     const provider = getProviderForModel(modelId);
     const encryptedKey = keyMap[provider];
-    if (!provider || !encryptedKey) continue;
+    if (!provider || !encryptedKey) {
+      errors.push(`${modelId}: Missing API key`);
+      continue;
+    }
 
     const started = Date.now();
     const apiKey = vault.decryptKey(encryptedKey);
@@ -78,10 +107,11 @@ async function executeSubtask(subtask, availableModels, keyMap, category) {
       };
     } catch (error) {
       console.warn(`[executor] ${modelId} failed: ${error.message}`);
+      errors.push(`${modelId} failed: ${error.message}`);
     }
   }
 
-  throw new Error(`All models failed for subtask ${subtask.id}`);
+  throw new Error(`All models failed for subtask ${subtask.id}. Reasons: ${errors.join(', ')}`);
 }
 
 async function executePlan(plan, keyMap, availableModels) {

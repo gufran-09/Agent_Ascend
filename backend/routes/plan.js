@@ -13,7 +13,7 @@ const router = express.Router();
 
 const planSchema = z.object({
   session_id: z.string().uuid(),
-  prompt: z.string().min(3).max(10000),
+  prompt: z.string().min(1).max(10000),
   available_models: z.array(z.string()).optional()
 });
 

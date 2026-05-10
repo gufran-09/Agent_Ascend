@@ -114,9 +114,20 @@ export default function ResultMessage({ message }: { message: ResultMessageData 
         <div className="msg-result-content">
           {tab === 'response' && (
             <div className="msg-result-output">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {result.finalOutput}
-              </ReactMarkdown>
+              {result.finalOutput ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {result.finalOutput}
+                </ReactMarkdown>
+              ) : (
+                <div style={{ color: 'var(--error)', padding: '10px 0' }}>
+                  Execution failed. Please check the Details tab for more information.
+                  {result.subtaskResults.some(r => r.confidenceNote?.includes('Execution failed')) && (
+                    <div style={{ marginTop: '10px', fontSize: '0.9em', opacity: 0.8 }}>
+                      Error: {result.subtaskResults.find(r => r.confidenceNote?.includes('Execution failed'))?.confidenceNote}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
