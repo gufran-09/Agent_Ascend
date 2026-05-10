@@ -68,7 +68,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setState(prev => ({ ...prev, backendOnline: online }));
       if (online) {
         api.getModels(userId).then(models => {
-          setState(prev => ({ ...prev, availableModels: models }));
+          const providers = Array.from(new Set(models.map(m => m.provider))).map(p => ({
+            provider: p as ConnectedProvider['provider'],
+            status: 'active' as const
+          }));
+          setState(prev => ({ ...prev, availableModels: models, connectedProviders: providers }));
         });
       }
     });
@@ -284,7 +288,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const refreshModels = useCallback(async () => {
     const models = await api.getModels(state.sessionId);
-    setState(prev => ({ ...prev, availableModels: models }));
+    const providers = Array.from(new Set(models.map(m => m.provider))).map(p => ({
+      provider: p as ConnectedProvider['provider'],
+      status: 'active' as const
+    }));
+    setState(prev => ({ ...prev, availableModels: models, connectedProviders: providers }));
   }, [state.sessionId]);
 
   const checkBackend = useCallback(async () => {
