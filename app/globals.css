@@ -655,6 +655,102 @@ html {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  align-items: center;
+}
+
+.msg-plan-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-edit {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.btn-edit:hover {
+  background: rgba(99, 102, 241, 0.1) !important;
+}
+
+/* Plan version badge */
+.msg-plan-version {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  color: var(--accent);
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 8px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  font-weight: 600;
+}
+
+/* Edit mode title input */
+.msg-plan-edit-title {
+  flex: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.msg-plan-edit-title:focus {
+  border-color: var(--accent-hover);
+}
+
+/* Edit mode model dropdown */
+.msg-plan-edit-model {
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 3px 8px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  outline: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  appearance: auto;
+}
+
+.msg-plan-edit-model:focus {
+  border-color: var(--accent-hover);
+}
+
+/* Edit mode prompt textarea */
+.msg-plan-edit-prompt {
+  width: 100%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  min-height: 60px;
+  transition: border-color 0.15s;
+}
+
+.msg-plan-edit-prompt:focus {
+  border-color: var(--accent-hover);
+}
+
+/* Edit error */
+.msg-plan-edit-error {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.08);
+  border-top: 1px solid var(--border);
 }
 
 /* Executing message */

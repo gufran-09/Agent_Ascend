@@ -89,6 +89,7 @@ export interface Plan {
   availableModels: string[];
   subtasks: Subtask[];
   totalEstimate: PlanEstimate;
+  planVersion?: number;
 }
 
 // ============================================

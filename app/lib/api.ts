@@ -89,3 +89,32 @@ export async function executePlan(
   }
   return res.json();
 }
+
+/**
+ * Edit a plan's subtasks (model, prompt, title) and get recalculated estimates
+ */
+export interface PlanEdit {
+  subtaskId: number;
+  field: 'assignedModel' | 'prompt' | 'title';
+  value: string;
+}
+
+export async function editPlan(
+  planId: string,
+  edits: PlanEdit[],
+  sessionId: string
+): Promise<Plan> {
+  const res = await fetch(`${API_BASE}/api/plan/${planId}/edit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      edits,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to edit plan');
+  }
+  return res.json();
+}
