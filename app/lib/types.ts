@@ -65,7 +65,9 @@ export interface Subtask {
   id: number;
   title: string;
   assignedModel: string;
+  modelReasoning?: string | null;
   prompt?: string;
+  dependsOn?: number[];
   estimatedTokens?: number;
   estimatedCost?: number;
   estimatedTime?: number;
@@ -83,6 +85,7 @@ export interface Plan {
   category: string;
   difficulty: string;
   needsDecomposition: boolean;
+  decompositionReasoning?: string | null;
   availableModels: string[];
   subtasks: Subtask[];
   totalEstimate: PlanEstimate;

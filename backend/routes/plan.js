@@ -40,7 +40,9 @@ router.post('/', validate(planSchema), async (req, res, next) => {
         id: task.id,
         title: task.title,
         assignedModel: task.assignedModel,
+        modelReasoning: task.modelReasoning || null,
         prompt: task.prompt,
+        dependsOn: task.dependsOn || [],
         estimatedTokens: estimate.tokens,
         estimatedCost: estimate.cost,
         estimatedTime: estimate.timeSeconds
@@ -60,6 +62,7 @@ router.post('/', validate(planSchema), async (req, res, next) => {
       category: generated.category,
       difficulty: generated.difficulty,
       needsDecomposition: generated.needsDecomposition,
+      decompositionReasoning: generated.decompositionReasoning || null,
       availableModels: resolvedModelIds,
       subtasks,
       totalEstimate: {

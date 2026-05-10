@@ -192,7 +192,7 @@ async function validateAnthropicKey(apiKey) {
 
 async function validateGoogleKey(apiKey) {
   const genAI = new GoogleGenerativeAI(apiKey);
-  const candidates = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro'];
+  const candidates = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-flash-latest'];
 
   let lastError = null;
   for (const modelId of candidates) {
