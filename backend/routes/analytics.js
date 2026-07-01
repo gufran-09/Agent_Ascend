@@ -15,7 +15,7 @@ router.get('/', validate(analyticsSchema, 'query'), async (req, res, next) => {
     const { session_id } = req.query;
 
     const availableModels = await getAvailableModels(session_id);
-    
+
     let summary = await getSessionSummary(session_id);
 
     if (summary.totalRuns === 0) {
