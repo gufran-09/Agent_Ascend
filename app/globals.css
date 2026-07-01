@@ -495,12 +495,11 @@ html {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
 
-.msg-plan-subtask:last-child {
-  border-bottom: none;
+.msg-plan-subtask:hover {
+  background: var(--bg-hover);
 }
 
 .msg-plan-subtask-num {
@@ -528,6 +527,111 @@ html {
   color: var(--text-dim);
 }
 
+/* Plan reasoning toggle */
+.msg-plan-reasoning-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.msg-plan-reasoning-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.msg-plan-reasoning-box {
+  padding: 10px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Subtask wrapper */
+.msg-plan-subtask-wrapper {
+  border-bottom: 1px solid var(--border);
+}
+
+.msg-plan-subtask-wrapper:last-child {
+  border-bottom: none;
+}
+
+/* Expand icon */
+.msg-plan-expand-icon {
+  color: var(--text-dim);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* Dependency badge */
+.msg-plan-dep-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+
+/* Subtask expanded details */
+.msg-plan-subtask-details {
+  padding: 0 16px 12px 52px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: slideDown 0.15s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-plan-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.msg-plan-detail-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.msg-plan-detail-value {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.msg-plan-detail-prompt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
 .msg-plan-totals {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
@@ -551,6 +655,102 @@ html {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  align-items: center;
+}
+
+.msg-plan-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-edit {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.btn-edit:hover {
+  background: rgba(99, 102, 241, 0.1) !important;
+}
+
+/* Plan version badge */
+.msg-plan-version {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  color: var(--accent);
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 8px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  font-weight: 600;
+}
+
+/* Edit mode title input */
+.msg-plan-edit-title {
+  flex: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.msg-plan-edit-title:focus {
+  border-color: var(--accent-hover);
+}
+
+/* Edit mode model dropdown */
+.msg-plan-edit-model {
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 3px 8px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  outline: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  appearance: auto;
+}
+
+.msg-plan-edit-model:focus {
+  border-color: var(--accent-hover);
+}
+
+/* Edit mode prompt textarea */
+.msg-plan-edit-prompt {
+  width: 100%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  min-height: 60px;
+  transition: border-color 0.15s;
+}
+
+.msg-plan-edit-prompt:focus {
+  border-color: var(--accent-hover);
+}
+
+/* Edit error */
+.msg-plan-edit-error {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.08);
+  border-top: 1px solid var(--border);
 }
 
 /* Executing message */

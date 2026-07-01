@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import type { AppState, Chat, Message, ConnectedProvider, Plan } from './types';
-import { generateId, now, truncate } from './utils';
+import { generateId, now, truncate, getSessionId } from './utils';
 import { createClient } from './supabase';
 import * as api from './api';
 import type { User } from '@supabase/supabase-js';
@@ -68,7 +68,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setState(prev => ({ ...prev, backendOnline: online }));
       if (online) {
         api.getModels(userId).then(models => {
-          setState(prev => ({ ...prev, availableModels: models }));
+          const providers = Array.from(new Set(models.map(m => m.provider))).map(p => ({
+            provider: p as ConnectedProvider['provider'],
+            status: 'active' as const
+          }));
+          setState(prev => ({ ...prev, availableModels: models, connectedProviders: providers }));
         });
       }
     });
@@ -83,6 +87,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setUser(user);
       if (user) {
         initializeForUser(user.id);
+      } else {
+        initializeForUser(getSessionId());
       }
     });
 
@@ -92,6 +98,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setUser(currentUser);
       if (currentUser) {
         initializeForUser(currentUser.id);
+      } else {
+        initializeForUser(getSessionId());
       }
     });
 
@@ -280,7 +288,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const refreshModels = useCallback(async () => {
     const models = await api.getModels(state.sessionId);
-    setState(prev => ({ ...prev, availableModels: models }));
+    const providers = Array.from(new Set(models.map(m => m.provider))).map(p => ({
+      provider: p as ConnectedProvider['provider'],
+      status: 'active' as const
+    }));
+    setState(prev => ({ ...prev, availableModels: models, connectedProviders: providers }));
   }, [state.sessionId]);
 
   const checkBackend = useCallback(async () => {

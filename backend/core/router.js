@@ -5,25 +5,30 @@ const supabase = require('../db/supabase');
 const { decryptKey } = require('../security/vault');
 const { classifyPrompt } = require('./classifier');
 
-const ROUTER_PROMPT = `You are an AI orchestration router.
+const ROUTER_PROMPT = `You are an AI orchestration router that decomposes user tasks into subtasks and assigns the best model for each.
 Return ONLY valid JSON in this exact shape:
 {
   "category": "research|coding|logic|creative|planning|math|general",
   "difficulty": "easy|medium|hard|agentic",
   "needsDecomposition": true,
+  "decompositionReasoning": "Explain WHY you chose to decompose (or not). What parts of the task benefit from splitting? How does this improve quality?",
   "subtasks": [
     {
       "id": 1,
       "title": "subtask title",
       "assignedModel": "must be one value from availableModels",
-      "prompt": "subtask prompt"
+      "modelReasoning": "Explain WHY this specific model was chosen for this subtask (e.g. best at coding, fastest for simple lookups, strongest at reasoning)",
+      "prompt": "subtask prompt",
+      "dependsOn": []
     }
   ]
 }
 Rules:
 - Use only models listed in availableModels.
 - If prompt is simple, return 1 subtask with needsDecomposition=false.
-- Keep subtasks concise and execution-ready.`;
+- Keep subtasks concise and execution-ready.
+- ALWAYS provide decompositionReasoning and modelReasoning — these help users understand your routing decisions.
+- Use dependsOn to list subtask IDs that must complete before this one starts.`;
 
 function modelToProvider(model) {
   const m = String(model || '').toLowerCase();
@@ -39,7 +44,7 @@ function normalizeModelIds(availableModels) {
 
 function choosePreferredModel(availableModels) {
   const modelIds = normalizeModelIds(availableModels);
-  const preference = ['gpt-4o-mini', 'gemini-1.5-flash', 'claude-3-haiku-20240307', 'gpt-4o'];
+  const preference = ['gpt-4o-mini', 'gemini-2.5-flash', 'gemini-2.0-flash', 'claude-3-haiku-20240307', 'gpt-4o', 'gemini-2.5-pro'];
   for (const preferred of preference) {
     if (modelIds.includes(preferred)) return preferred;
   }
@@ -74,14 +79,16 @@ function buildHeuristicSubtasks(prompt, availableModels, classification) {
       id: 1,
       title: 'Complete request',
       assignedModel: bestModel,
-      prompt
+      modelReasoning: `Selected ${bestModel} as the best available model for a single-step ${classification.category} task.`,
+      prompt,
+      dependsOn: []
     }];
   }
 
   const chunks = [
-    { id: 1, title: 'Analyze objective', prompt: `Analyze the request and extract key objectives:\n${prompt}` },
-    { id: 2, title: 'Produce detailed solution', prompt: `Create the main deliverable for this request:\n${prompt}` },
-    { id: 3, title: 'Review and finalize output', prompt: `Review the output for completeness and return polished final content for:\n${prompt}` }
+    { id: 1, title: 'Analyze objective', prompt: `Analyze the request and extract key objectives:\n${prompt}`, modelReasoning: 'Fast model chosen for initial analysis — speed is prioritized over depth at this stage.', dependsOn: [] },
+    { id: 2, title: 'Produce detailed solution', prompt: `Create the main deliverable for this request:\n${prompt}`, modelReasoning: 'Strongest available model assigned for the core task — quality and depth are critical here.', dependsOn: [1] },
+    { id: 3, title: 'Review and finalize output', prompt: `Review the output for completeness and return polished final content for:\n${prompt}`, modelReasoning: 'Fast model used for review — checks completeness and formatting without excessive cost.', dependsOn: [2] }
   ];
 
   return chunks.map((task, index) => ({
@@ -110,7 +117,9 @@ function normalizePlan(plan, prompt, availableModels) {
       id: Number.isInteger(task.id) ? task.id : idx + 1,
       title: String(task.title || `Subtask ${idx + 1}`),
       assignedModel,
-      prompt: String(task.prompt || prompt)
+      modelReasoning: task.modelReasoning || null,
+      prompt: String(task.prompt || prompt),
+      dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : []
     };
   });
 
@@ -118,6 +127,7 @@ function normalizePlan(plan, prompt, availableModels) {
     category,
     difficulty,
     needsDecomposition: Boolean(plan?.needsDecomposition ?? (subtasks.length > 1)),
+    decompositionReasoning: plan?.decompositionReasoning || null,
     subtasks
   };
 }
