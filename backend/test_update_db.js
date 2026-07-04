@@ -8,7 +8,7 @@ async function test() {
     .from('model_registry')
     .update({ model_id: 'gemini-1.5-flash-latest' })
     .eq('model_id', 'gemini-1.5-flash');
-  
+
   if (error) console.error(error);
   else console.log('Updated successfully');
 }
